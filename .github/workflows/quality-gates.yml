@@ -1,0 +1,245 @@
+#.github/workflows/quality-gates.yml
+name: Quality Gates
+
+env:
+  JAVA_VERSION: '21'
+  COMPONENTE: ${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+  MIN_COVERAGE: '80'
+
+on:
+  pull_request:
+    branches: [main, desarrollo]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      debug:
+        type: boolean
+        description: 'Ejecutar en modo depuración'
+        required: false
+        default: false
+        
+# Prevenir ejecuciones paralelas para evitar interferencias
+concurrency:
+  group: vucem-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-quality:
+    name: Análisis de Calidad de Código
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Validar Estilo de Código
+        run: mvn -B checkstyle:check
+
+      - name: Analizar con Spotbugs
+        run: mvn -B spotbugs:check
+
+      - name: Analizar con PMD
+        run: mvn -B pmd:check
+
+      - name: Verificar Arquitectura
+        run: mvn -B test-compile org.apache.maven.plugins:maven-surefire-plugin:3.1.2:test -Dtest="*ArchitectureTest"
+
+      - name: Generar informe de calidad
+        run: |
+          mkdir -p quality-reports
+          echo "# Informe de Calidad" > quality-reports/quality-summary.md
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> quality-reports/quality-summary.md
+          echo "## Branch: ${{ github.ref_name }}" >> quality-reports/quality-summary.md
+          echo "## Commit: ${{ github.sha }}" >> quality-reports/quality-summary.md
+          echo "## Estándares verificados:" >> quality-reports/quality-summary.md
+          echo "- Checkstyle: ✓" >> quality-reports/quality-summary.md
+          echo "- SpotBugs: ✓" >> quality-reports/quality-summary.md
+          echo "- PMD: ✓" >> quality-reports/quality-summary.md
+          echo "- ArchUnit: ✓" >> quality-reports/quality-summary.md
+
+      - name: Publicar informes de calidad
+        uses: actions/upload-artifact@v3
+        with:
+          name: quality-reports
+          path: quality-reports
+          retention-days: 7
+
+  code-coverage:
+    name: Cobertura de Código
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Ejecutar pruebas con cobertura
+        run: mvn -B verify jacoco:report
+
+      - name: Verificar cobertura mínima
+        run: |
+          mvn -B jacoco:check -Djacoco.minimum.coverage=${{ env.MIN_COVERAGE }}
+
+      - name: Publicar informe de cobertura
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: target/site/jacoco
+          retention-days: 7
+
+  sonarqube-analysis:
+    name: Análisis SonarQube
+    runs-on: ubuntu-latest
+    needs: code-coverage
+    timeout-minutes: 15
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          
+      - name: Descargar informes de cobertura
+        uses: actions/download-artifact@v3
+        with:
+          name: coverage-report
+          path: target/site/jacoco
+          
+      - name: Ejecutar análisis SonarQube
+        if: env.SONAR_TOKEN != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PR_BRANCH="${{ github.head_ref }}"
+            PR_BASE="${{ github.base_ref }}"
+            mvn -B sonar:sonar \
+              -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.COMPONENTE }} \
+              -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+              -Dsonar.pullrequest.branch=$PR_BRANCH \
+              -Dsonar.pullrequest.base=$PR_BASE
+          else
+            mvn -B sonar:sonar \
+              -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.COMPONENTE }} \
+              -Dsonar.branch.name=${{ github.ref_name }}
+          fi
+
+  code-smell-analysis:
+    name: Análisis de Code Smells
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Encontrar código duplicado con CPD
+        run: mvn -B pmd:cpd-check
+
+      - name: Revisar complejidad ciclomática
+        run: |
+          mvn -B pmd:check -Dpmd.rulesets=.github/pmd/complexity.xml || true
+          # No fallamos el pipeline por complejidad, solo reportamos
+
+      - name: Revisar estándares VUCEM
+        run: |
+          # Este paso verificaría estándares específicos de VUCEM
+          # Por ahora es un placeholder
+          echo "Verificando estándares específicos de VUCEM..."
+
+  dependency-check:
+    name: Validación de Dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verificar dependencias obsoletas
+        run: mvn -B versions:display-dependency-updates
+
+      - name: Verificar plugins obsoletos
+        run: mvn -B versions:display-plugin-updates
+
+      - name: Verificar conflictos de dependencias
+        run: mvn -B dependency:analyze
+
+      - name: Generar reporte de dependencias
+        run: |
+          mkdir -p dependency-reports
+          mvn -B dependency:tree > dependency-reports/dependency-tree.txt
+          mvn -B dependency:analyze > dependency-reports/dependency-analysis.txt
+
+      - name: Publicar informes de dependencias
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-reports
+          path: dependency-reports
+          retention-days: 7
+
+  quality-summary:
+    name: Resumen de Calidad
+    runs-on: ubuntu-latest
+    needs: [code-quality, code-coverage, sonarqube-analysis, code-smell-analysis, dependency-check]
+    if: always()
+    steps:
+      - name: Generar resumen
+        run: |
+          mkdir -p quality-summary
+          echo "# Resumen de Calidad de Código" > quality-summary/summary.md
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> quality-summary/summary.md
+          echo "## Branch: ${{ github.ref_name }}" >> quality-summary/summary.md
+          echo "## Commit: ${{ github.sha }}" >> quality-summary/summary.md
+          echo "## Resultados:" >> quality-summary/summary.md
+          
+          # Añadir estado de cada job
+          echo "- Análisis de Calidad: ${{ needs.code-quality.result == 'success' && '✅' || '❌' }}" >> quality-summary/summary.md
+          echo "- Cobertura de Código: ${{ needs.code-coverage.result == 'success' && '✅' || '❌' }}" >> quality-summary/summary.md
+          echo "- Análisis SonarQube: ${{ needs.sonarqube-analysis.result == 'success' && '✅' || needs.sonarqube-analysis.result == 'skipped' && '⏭️' || '❌' }}" >> quality-summary/summary.md
+          echo "- Análisis de Code Smells: ${{ needs.code-smell-analysis.result == 'success' && '✅' || '❌' }}" >> quality-summary/summary.md
+          echo "- Validación de Dependencias: ${{ needs.dependency-check.result == 'success' && '✅' || '❌' }}" >> quality-summary/summary.md
+
+      - name: Publicar resumen
+        uses: actions/upload-artifact@v3
+        with:
+          name: quality-summary
+          path: quality-summary
+          retention-days: 30

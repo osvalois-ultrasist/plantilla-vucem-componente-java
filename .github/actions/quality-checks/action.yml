@@ -1,0 +1,191 @@
+#.github/workflows/actions/quality-checks/action.yml
+name: 'Quality Checks'
+description: 'Ejecuta verificaciones de calidad de código para aplicaciones VUCEM'
+
+inputs:
+  java-version:
+    description: 'Versión de Java a utilizar'
+    required: false
+    default: '21'
+  min-coverage:
+    description: 'Cobertura mínima requerida (porcentaje)'
+    required: false
+    default: '80'
+  run-checkstyle:
+    description: 'Ejecutar análisis de estilo de código'
+    required: false
+    default: 'true'
+  run-spotbugs:
+    description: 'Ejecutar análisis de bugs con Spotbugs'
+    required: false
+    default: 'true'
+  run-pmd:
+    description: 'Ejecutar análisis con PMD'
+    required: false
+    default: 'true'
+  run-archunit:
+    description: 'Ejecutar verificación de arquitectura con ArchUnit'
+    required: false
+    default: 'true'
+  sonar-project-key:
+    description: 'Clave del proyecto en SonarQube'
+    required: false
+    default: ''
+  sonar-host-url:
+    description: 'URL del servidor SonarQube'
+    required: false
+    default: 'https://sonarcloud.io'
+  publish-reports:
+    description: 'Publicar reportes de análisis de calidad'
+    required: false
+    default: 'true'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configurar JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Validar Estilo de Código
+      if: inputs.run-checkstyle == 'true'
+      shell: bash
+      run: |
+        echo "Ejecutando revisión de estilo de código con Checkstyle..."
+        mvn -B checkstyle:check
+        echo "Verificación de estilo de código completada."
+
+    - name: Analizar con Spotbugs
+      if: inputs.run-spotbugs == 'true'
+      shell: bash
+      run: |
+        echo "Ejecutando análisis de código con Spotbugs..."
+        mvn -B spotbugs:check
+        echo "Análisis con Spotbugs completado."
+
+    - name: Analizar con PMD
+      if: inputs.run-pmd == 'true'
+      shell: bash
+      run: |
+        echo "Ejecutando análisis de código con PMD..."
+        mvn -B pmd:check
+        echo "Análisis con PMD completado."
+
+    - name: Verificar Arquitectura con ArchUnit
+      if: inputs.run-archunit == 'true'
+      shell: bash
+      run: |
+        echo "Verificando cumplimiento de arquitectura con ArchUnit..."
+        mvn -B test-compile org.apache.maven.plugins:maven-surefire-plugin:3.1.2:test -Dtest="*ArchitectureTest"
+        echo "Verificación de arquitectura completada."
+
+    - name: Ejecutar pruebas con cobertura
+      shell: bash
+      run: |
+        echo "Ejecutando pruebas con análisis de cobertura..."
+        mvn -B verify jacoco:report
+        echo "Pruebas y análisis de cobertura completados."
+
+    - name: Verificar cobertura mínima
+      shell: bash
+      run: |
+        echo "Verificando que la cobertura de código cumpla con el mínimo requerido (${{ inputs.min-coverage }}%)..."
+        mvn -B jacoco:check -Djacoco.minimum.coverage=${{ inputs.min-coverage }}
+        echo "Verificación de cobertura completada."
+
+    - name: Analizar con SonarQube/SonarCloud
+      if: inputs.sonar-project-key != ''
+      shell: bash
+      run: |
+        echo "Ejecutando análisis SonarQube para el proyecto ${{ inputs.sonar-project-key }}..."
+        
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+          PR_BRANCH="${GITHUB_HEAD_REF}"
+          PR_BASE="${GITHUB_BASE_REF}"
+          mvn -B sonar:sonar \
+            -Dsonar.projectKey=${{ inputs.sonar-project-key }} \
+            -Dsonar.host.url=${{ inputs.sonar-host-url }} \
+            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+            -Dsonar.pullrequest.branch=$PR_BRANCH \
+            -Dsonar.pullrequest.base=$PR_BASE
+        else
+          mvn -B sonar:sonar \
+            -Dsonar.projectKey=${{ inputs.sonar-project-key }} \
+            -Dsonar.host.url=${{ inputs.sonar-host-url }} \
+            -Dsonar.branch.name=${GITHUB_REF_NAME}
+        fi
+        
+        echo "Análisis SonarQube completado."
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+
+    - name: Generar informes de calidad
+      shell: bash
+      run: |
+        echo "Generando informes consolidados de calidad..."
+        mkdir -p quality-reports
+        
+        # Resumen principal
+        echo "# Informe de Calidad de Código" > quality-reports/quality-summary.md
+        echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> quality-reports/quality-summary.md
+        echo "## Commit: ${GITHUB_SHA}" >> quality-reports/quality-summary.md
+        echo "## Branch: ${GITHUB_REF_NAME}" >> quality-reports/quality-summary.md
+        echo "" >> quality-reports/quality-summary.md
+        
+        # Estándares verificados
+        echo "## Estándares verificados:" >> quality-reports/quality-summary.md
+        
+        if [ "${{ inputs.run-checkstyle }}" == "true" ]; then
+          echo "- Checkstyle: ✅" >> quality-reports/quality-summary.md
+        else
+          echo "- Checkstyle: ⏭️ (omitido)" >> quality-reports/quality-summary.md
+        fi
+        
+        if [ "${{ inputs.run-spotbugs }}" == "true" ]; then
+          echo "- SpotBugs: ✅" >> quality-reports/quality-summary.md
+        else
+          echo "- SpotBugs: ⏭️ (omitido)" >> quality-reports/quality-summary.md
+        fi
+        
+        if [ "${{ inputs.run-pmd }}" == "true" ]; then
+          echo "- PMD: ✅" >> quality-reports/quality-summary.md
+        else
+          echo "- PMD: ⏭️ (omitido)" >> quality-reports/quality-summary.md
+        fi
+        
+        if [ "${{ inputs.run-archunit }}" == "true" ]; then
+          echo "- ArchUnit: ✅" >> quality-reports/quality-summary.md
+        else
+          echo "- ArchUnit: ⏭️ (omitido)" >> quality-reports/quality-summary.md
+        fi
+        
+        # Cobertura de código
+        echo "- JaCoCo: ✅ (mínimo: ${{ inputs.min-coverage }}%)" >> quality-reports/quality-summary.md
+        
+        # SonarQube
+        if [ "${{ inputs.sonar-project-key }}" != "" ]; then
+          echo "- SonarQube: ✅" >> quality-reports/quality-summary.md
+          echo "  - Proyecto: ${{ inputs.sonar-project-key }}" >> quality-reports/quality-summary.md
+          echo "  - URL: ${{ inputs.sonar-host-url }}/dashboard?id=${{ inputs.sonar-project-key }}" >> quality-reports/quality-summary.md
+        else
+          echo "- SonarQube: ⏭️ (omitido)" >> quality-reports/quality-summary.md
+        fi
+        
+        echo "Informes de calidad generados."
+
+    - name: Publicar informes de calidad
+      if: inputs.publish-reports == 'true'
+      uses: actions/upload-artifact@v3
+      with:
+        name: quality-reports
+        path: |
+          quality-reports/
+          target/site/jacoco/
+          target/site/checkstyle/
+          target/site/spotbugs/
+          target/site/pmd/
+        retention-days: 30

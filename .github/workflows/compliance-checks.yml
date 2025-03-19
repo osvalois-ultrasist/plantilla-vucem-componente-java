@@ -1,0 +1,511 @@
+#.github/workflows/compliance-checks.yml
+name: Compliance Checks
+
+env:
+  JAVA_VERSION: '21'
+  COMPONENTE: ${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Todos los lunes a las 3 AM
+  workflow_dispatch:
+    inputs:
+      debug:
+        type: boolean
+        description: 'Ejecutar en modo depuración'
+        required: false
+        default: false
+        
+# Prevenir ejecuciones paralelas para evitar interferencias
+concurrency:
+  group: vucem-compliance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  initialize:
+    name: Inicialización
+    runs-on: ubuntu-latest
+    outputs:
+      short-sha: ${{ steps.vars.outputs.short-sha }}
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar variables
+        id: vars
+        run: |
+          echo "short-sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "Fecha de ejecución: $(date +'%Y-%m-%d %H:%M:%S')"
+
+  license-compliance:
+    name: Cumplimiento de Licencias
+    needs: initialize
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verificar licencias con License Finder
+        run: |
+          # Instalar License Finder
+          sudo gem install license_finder
+
+          # Ejecutar verificación de licencias
+          license_finder || true
+
+      - name: Análisis de licencias con Maven
+        run: |
+          # Usar plugin de licencias para verificar dependencias
+          mvn -B org.codehaus.mojo:license-maven-plugin:aggregate-add-third-party
+
+      - name: Generar reporte CycloneDX con licencias
+        run: |
+          mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+
+      - name: Publicar informe de licencias
+        uses: actions/upload-artifact@v3
+        with:
+          name: license-report
+          path: |
+            target/bom.json
+            target/generated-sources/license/
+            target/site/license/
+          retention-days: 30
+
+  policy-compliance:
+    name: Cumplimiento de Políticas
+    needs: initialize
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar estructura de archivos
+        run: |
+          mkdir -p compliance-reports
+
+          echo "### Verificación de estructura de archivos" > compliance-reports/file-structure.md
+          echo "#### Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> compliance-reports/file-structure.md
+          
+          # Verificar archivos obligatorios
+          echo "#### Archivos obligatorios:" >> compliance-reports/file-structure.md
+          echo "| Archivo | Presente |" >> compliance-reports/file-structure.md
+          echo "|---------|----------|" >> compliance-reports/file-structure.md
+          
+          # Lista de archivos obligatorios según VUCEM
+          archivos_obligatorios=(
+            "README.md" 
+            "LICENSE" 
+            "SECURITY.md" 
+            "CONTRIBUTING.md" 
+            "CODE_OF_CONDUCT.md"
+            "pom.xml"
+          )
+          
+          for archivo in "${archivos_obligatorios[@]}"; do
+            if [ -f "$archivo" ]; then
+              echo "| $archivo | ✅ |" >> compliance-reports/file-structure.md
+            else
+              echo "| $archivo | ❌ |" >> compliance-reports/file-structure.md
+            fi
+          done
+
+      - name: Verificar estructura de directorios
+        run: |
+          echo "#### Estructura de directorios:" >> compliance-reports/file-structure.md
+          
+          # Directorios esperados según arquitectura VUCEM
+          directorios_esperados=(
+            "src/main/java/mx/gob/vucem"
+            "src/main/resources"
+            "src/test/java/mx/gob/vucem"
+            "src/test/resources"
+            "docs"
+            "infrastructure"
+          )
+          
+          echo "| Directorio | Presente |" >> compliance-reports/file-structure.md
+          echo "|------------|----------|" >> compliance-reports/file-structure.md
+          
+          for directorio in "${directorios_esperados[@]}"; do
+            if [ -d "$directorio" ]; then
+              echo "| $directorio | ✅ |" >> compliance-reports/file-structure.md
+            else
+              echo "| $directorio | ❌ |" >> compliance-reports/file-structure.md
+            fi
+          done
+
+      - name: Verificar cumplimiento de documentación
+        run: |
+          echo "### Verificación de documentación" > compliance-reports/documentation.md
+          echo "#### Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> compliance-reports/documentation.md
+          
+          # Verificar secciones obligatorias en README
+          if [ -f "README.md" ]; then
+            echo "#### Secciones en README:" >> compliance-reports/documentation.md
+            echo "| Sección | Presente |" >> compliance-reports/documentation.md
+            echo "|---------|----------|" >> compliance-reports/documentation.md
+            
+            secciones_readme=(
+              "# " # Título
+              "## Descripción" 
+              "## Instalación"
+              "## Uso"
+              "## Desarrollo"
+              "## Despliegue"
+              "## Contribución"
+            )
+            
+            for seccion in "${secciones_readme[@]}"; do
+              if grep -q "$seccion" README.md; then
+                echo "| $seccion | ✅ |" >> compliance-reports/documentation.md
+              else
+                echo "| $seccion | ❌ |" >> compliance-reports/documentation.md
+              fi
+            done
+          else
+            echo "README.md no encontrado" >> compliance-reports/documentation.md
+          fi
+
+      - name: Verificar cumplimiento de estándares específicos
+        run: |
+          # Verificar estándares específicos de VUCEM
+          echo "### Verificación de estándares VUCEM" > compliance-reports/vucem-standards.md
+          echo "#### Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> compliance-reports/vucem-standards.md
+          
+          # Verificar estructura de paquetes
+          echo "#### Estructura de paquetes Java:" >> compliance-reports/vucem-standards.md
+          echo "| Paquete | Presente |" >> compliance-reports/vucem-standards.md
+          echo "|---------|----------|" >> compliance-reports/vucem-standards.md
+          
+          paquetes_esperados=(
+            "mx/gob/vucem/componente/application"
+            "mx/gob/vucem/componente/domain"
+            "mx/gob/vucem/componente/infrastructure"
+            "mx/gob/vucem/componente/interfaces"
+          )
+          
+          for paquete in "${paquetes_esperados[@]}"; do
+            if [ -d "src/main/java/$paquete" ]; then
+              echo "| $paquete | ✅ |" >> compliance-reports/vucem-standards.md
+            else
+              echo "| $paquete | ❌ |" >> compliance-reports/vucem-standards.md
+            fi
+          done
+
+      - name: Publicar informes de cumplimiento
+        uses: actions/upload-artifact@v3
+        with:
+          name: compliance-reports
+          path: compliance-reports
+          retention-days: 30
+
+  architecture-compliance:
+    name: Cumplimiento de Arquitectura
+    needs: initialize
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verificar cumplimiento de arquitectura con ArchUnit
+        run: |
+          # Ejecutar pruebas de arquitectura
+          mvn -B test-compile org.apache.maven.plugins:maven-surefire-plugin:3.1.2:test -Dtest="*ArchitectureTest"
+
+      - name: Análisis de la arquitectura
+        run: |
+          mkdir -p architecture-reports
+          
+          echo "### Análisis de Arquitectura" > architecture-reports/architecture-analysis.md
+          echo "#### Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> architecture-reports/architecture-analysis.md
+          
+          # Análisis de dependencias
+          echo "#### Dependencias entre capas:" >> architecture-reports/architecture-analysis.md
+          
+          # Contar clases por capa
+          echo "#### Distribución de clases por capa:" >> architecture-reports/architecture-analysis.md
+          echo "| Capa | Número de clases |" >> architecture-reports/architecture-analysis.md
+          echo "|------|-----------------|" >> architecture-reports/architecture-analysis.md
+          
+          app_classes=$(find src/main/java/mx/gob/vucem/componente/application -name "*.java" 2>/dev/null | wc -l)
+          domain_classes=$(find src/main/java/mx/gob/vucem/componente/domain -name "*.java" 2>/dev/null | wc -l)
+          infra_classes=$(find src/main/java/mx/gob/vucem/componente/infrastructure -name "*.java" 2>/dev/null | wc -l)
+          interfaces_classes=$(find src/main/java/mx/gob/vucem/componente/interfaces -name "*.java" 2>/dev/null | wc -l)
+          
+          echo "| Aplicación | $app_classes |" >> architecture-reports/architecture-analysis.md
+          echo "| Dominio | $domain_classes |" >> architecture-reports/architecture-analysis.md
+          echo "| Infraestructura | $infra_classes |" >> architecture-reports/architecture-analysis.md
+          echo "| Interfaces | $interfaces_classes |" >> architecture-reports/architecture-analysis.md
+
+      - name: Publicar informes de arquitectura
+        uses: actions/upload-artifact@v3
+        with:
+          name: architecture-reports
+          path: architecture-reports
+          retention-days: 30
+
+  devops-compliance:
+    name: Cumplimiento DevOps
+    needs: initialize
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar cumplimiento de CI/CD
+        run: |
+          mkdir -p devops-reports
+          
+          echo "### Verificación de DevOps" > devops-reports/devops-compliance.md
+          echo "#### Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> devops-reports/devops-compliance.md
+          
+          # Verificar workflows de GitHub Actions
+          echo "#### GitHub Actions Workflows:" >> devops-reports/devops-compliance.md
+          echo "| Workflow | Presente |" >> devops-reports/devops-compliance.md
+          echo "|----------|----------|" >> devops-reports/devops-compliance.md
+          
+          workflows=(
+            ".github/workflows/ci.yml"
+            ".github/workflows/cd.yml"
+            ".github/workflows/security-scan.yml"
+            ".github/workflows/quality-gates.yml"
+            ".github/workflows/compliance-checks.yml"
+          )
+          
+          for workflow in "${workflows[@]}"; do
+            if [ -f "$workflow" ]; then
+              echo "| $workflow | ✅ |" >> devops-reports/devops-compliance.md
+            else
+              echo "| $workflow | ❌ |" >> devops-reports/devops-compliance.md
+            fi
+          done
+          
+          # Verificar configuración de Kubernetes
+          echo "#### Configuración de Kubernetes:" >> devops-reports/devops-compliance.md
+          echo "| Archivo | Presente |" >> devops-reports/devops-compliance.md
+          echo "|---------|----------|" >> devops-reports/devops-compliance.md
+          
+          k8s_files=(
+            "infrastructure/kubernetes/base/deployment.yaml"
+            "infrastructure/kubernetes/base/service.yaml"
+            "infrastructure/kubernetes/base/kustomization.yaml"
+            "infrastructure/kubernetes/environments/dev/kustomization.yaml"
+            "infrastructure/kubernetes/environments/test/kustomization.yaml"
+            "infrastructure/kubernetes/environments/prod/kustomization.yaml"
+          )
+          
+          for k8s_file in "${k8s_files[@]}"; do
+            if [ -f "$k8s_file" ]; then
+              echo "| $k8s_file | ✅ |" >> devops-reports/devops-compliance.md
+            else
+              echo "| $k8s_file | ❌ |" >> devops-reports/devops-compliance.md
+            fi
+          done
+          
+          # Verificar configuración de Docker
+          echo "#### Configuración de Docker:" >> devops-reports/devops-compliance.md
+          echo "| Archivo | Presente |" >> devops-reports/devops-compliance.md
+          echo "|---------|----------|" >> devops-reports/devops-compliance.md
+          
+          if [ -f "Dockerfile" ]; then
+            echo "| Dockerfile | ✅ |" >> devops-reports/devops-compliance.md
+          else
+            echo "| Dockerfile | ❌ |" >> devops-reports/devops-compliance.md
+          fi
+          
+          if [ -f ".dockerignore" ]; then
+            echo "| .dockerignore | ✅ |" >> devops-reports/devops-compliance.md
+          else
+            echo "| .dockerignore | ❌ |" >> devops-reports/devops-compliance.md
+          fi
+
+      - name: Publicar informes de DevOps
+        uses: actions/upload-artifact@v3
+        with:
+          name: devops-reports
+          path: devops-reports
+          retention-days: 30
+
+  evidence-generation:
+    name: Generación de Evidencia
+    needs: [initialize, license-compliance, policy-compliance, architecture-compliance, devops-compliance]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Descargar informes de cumplimiento
+        uses: actions/download-artifact@v3
+        with:
+          path: all-reports
+
+      - name: Generar informe consolidado
+        run: |
+          mkdir -p compliance-evidence
+          
+          # Crear informe principal
+          echo "# Informe de Cumplimiento - ${{ env.COMPONENTE }}" > compliance-evidence/compliance-report.md
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> compliance-evidence/compliance-report.md
+          echo "## Versión: ${{ needs.initialize.outputs.short-sha }}" >> compliance-evidence/compliance-report.md
+          echo "## Repositorio: ${{ github.repository }}" >> compliance-evidence/compliance-report.md
+          
+          # Consolidar todos los informes
+          echo "## Resumen de Cumplimiento" >> compliance-evidence/compliance-report.md
+          echo "| Categoría | Estado |" >> compliance-evidence/compliance-report.md
+          echo "|-----------|--------|" >> compliance-evidence/compliance-report.md
+          echo "| Licencias | ${{ needs.license-compliance.result == 'success' && '✅' || '❌' }} |" >> compliance-evidence/compliance-report.md
+          echo "| Políticas | ${{ needs.policy-compliance.result == 'success' && '✅' || '❌' }} |" >> compliance-evidence/compliance-report.md
+          echo "| Arquitectura | ${{ needs.architecture-compliance.result == 'success' && '✅' || '❌' }} |" >> compliance-evidence/compliance-report.md
+          echo "| DevOps | ${{ needs.devops-compliance.result == 'success' && '✅' || '❌' }} |" >> compliance-evidence/compliance-report.md
+          
+          # Agregar detalles de cada categoría
+          echo "## Detalles por Categoría" >> compliance-evidence/compliance-report.md
+          
+          # Copiar informes individuales
+          if [ -f "all-reports/compliance-reports/file-structure.md" ]; then
+            echo "### Estructura de Archivos" >> compliance-evidence/compliance-report.md
+            cat all-reports/compliance-reports/file-structure.md >> compliance-evidence/compliance-report.md
+            echo "\n" >> compliance-evidence/compliance-report.md
+          fi
+          
+          if [ -f "all-reports/compliance-reports/documentation.md" ]; then
+            echo "### Documentación" >> compliance-evidence/compliance-report.md
+            cat all-reports/compliance-reports/documentation.md >> compliance-evidence/compliance-report.md
+            echo "\n" >> compliance-evidence/compliance-report.md
+          fi
+          
+          if [ -f "all-reports/compliance-reports/vucem-standards.md" ]; then
+            echo "### Estándares VUCEM" >> compliance-evidence/compliance-report.md
+            cat all-reports/compliance-reports/vucem-standards.md >> compliance-evidence/compliance-report.md
+            echo "\n" >> compliance-evidence/compliance-report.md
+          fi
+          
+          if [ -f "all-reports/architecture-reports/architecture-analysis.md" ]; then
+            echo "### Análisis de Arquitectura" >> compliance-evidence/compliance-report.md
+            cat all-reports/architecture-reports/architecture-analysis.md >> compliance-evidence/compliance-report.md
+            echo "\n" >> compliance-evidence/compliance-report.md
+          fi
+          
+          if [ -f "all-reports/devops-reports/devops-compliance.md" ]; then
+            echo "### DevOps" >> compliance-evidence/compliance-report.md
+            cat all-reports/devops-reports/devops-compliance.md >> compliance-evidence/compliance-report.md
+            echo "\n" >> compliance-evidence/compliance-report.md
+          fi
+          
+          # Convertir a PDF para evidencia formal
+          apt-get update && apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended
+          pandoc compliance-evidence/compliance-report.md -o compliance-evidence/reporte-cumplimiento-${{ env.COMPONENTE }}.pdf
+
+      - name: Publicar evidencia consolidada
+        uses: actions/upload-artifact@v3
+        with:
+          name: compliance-evidence
+          path: compliance-evidence
+          retention-days: 90
+
+  compliance-notification:
+    name: Notificación de Cumplimiento
+    needs: [initialize, evidence-generation]
+    if: always() && needs.evidence-generation.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determinar estado general
+        id: status
+        run: |
+          if [[ "${{ needs.evidence-generation.result }}" == "success" ]]; then
+            echo "overall_status=success" >> $GITHUB_OUTPUT
+            echo "icon=✅" >> $GITHUB_OUTPUT
+            echo "color=good" >> $GITHUB_OUTPUT
+          else
+            echo "overall_status=failure" >> $GITHUB_OUTPUT
+            echo "icon=❌" >> $GITHUB_OUTPUT
+            echo "color=danger" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Enviar notificación
+        if: vars.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "📋 Reporte de Cumplimiento - ${{ env.COMPONENTE }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Resultado de la verificación de cumplimiento para *${{ env.COMPONENTE }}*"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Estado:* ${{ steps.status.outputs.icon }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Fecha:* $(date +'%Y-%m-%d')"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repositorio:* ${{ github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:* ${{ needs.initialize.outputs.short-sha }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Ver Detalles"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

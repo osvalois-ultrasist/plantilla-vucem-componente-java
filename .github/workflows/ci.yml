@@ -1,0 +1,819 @@
+#.github/workflows/ci.yml
+# Workflow modular para Integración Continua
+# Arquitectura modular diseñada para facilitar mantenimiento y reutilización
+
+name: CI Pipeline
+
+# Variables globales para todo el workflow
+env:
+  REGISTRY: ghcr.io
+  REPO_MAVEN: https://maven.pkg.github.com/${{ github.repository_owner }}
+  NAMESPACE_K8S: vucem-${{ vars.COMPONENTE_AREA || 'default' }}
+  COMPONENTE: ${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+  JAVA_VERSION: '21'
+  MIN_COVERAGE: '80'
+  APPID: vucem-${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+
+# Disparo del workflow
+on:
+  push:
+    branches: [main, desarrollo, 'feature/**', 'hotfix/**', 'release/**']
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main, desarrollo]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      debug:
+        type: boolean
+        description: 'Ejecutar en modo depuración'
+        required: false
+        default: false
+
+# Prevenir ejecuciones paralelas sobre la misma rama
+concurrency:
+  group: vucem-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    ETAPA DE INICIALIZACIÓN                             ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  initialize:
+    name: Inicialización
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+      matriz-test: ${{ steps.set-test-matrix.outputs.matriz }}
+      should-deploy: ${{ steps.check-deploy.outputs.deploy }}
+      short-sha: ${{ steps.vars.outputs.short-sha }}
+      branch-name: ${{ steps.vars.outputs.branch-name }}
+      cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determinar variables generales
+        id: vars
+        run: |
+          echo "short-sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "branch-name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//-/g')" >> $GITHUB_OUTPUT
+
+      - name: Determinar versión del artefacto
+        id: set-version
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo '0.1.0')
+          elif [[ "${{ github.ref }}" == "refs/heads/release/"* ]]; then
+            BRANCH_VERSION=$(echo ${{ github.ref }} | sed 's/refs\/heads\/release\///')
+            VERSION="${BRANCH_VERSION}-RC.$(date +'%Y%m%d%H%M')"
+          else
+            BRANCH=$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//-/g')
+            VERSION="0.0.0-${BRANCH}.$(date +'%Y%m%d%H%M').$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Versión determinada: ${VERSION}"
+
+      - name: Generar clave para caché
+        id: cache-key
+        run: |
+          CACHE_HASH=$(find . -type f -name "pom.xml" -exec md5sum {} \; | sort | md5sum | cut -d ' ' -f1)
+          echo "key=deps-${{ runner.os }}-${{ env.JAVA_VERSION }}-${CACHE_HASH}" >> $GITHUB_OUTPUT
+
+      - name: Configurar matriz de pruebas
+        id: set-test-matrix
+        run: |
+          MATRIZ='{
+            "os": ["ubuntu-latest"],
+            "java-version": ["21"],
+            "database": ["h2", "postgresql"]
+          }'
+          echo "matriz=${MATRIZ}" >> $GITHUB_OUTPUT
+
+      - name: Verificar requerimiento de despliegue
+        id: check-deploy
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/desarrollo" || "${{ github.ref }}" == "refs/heads/release/"* ]]; then
+            DEPLOY=true
+          else
+            DEPLOY=false
+          fi
+          echo "deploy=${DEPLOY}" >> $GITHUB_OUTPUT
+          echo "Despliegue: ${DEPLOY}"
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    ETAPA DE ANÁLISIS DE CALIDAD                        ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  quality-check:
+    name: Análisis de Calidad
+    needs: initialize
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Ejecutar verificaciones de calidad
+        uses: ./.github/actions/quality-checks
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          min-coverage: ${{ env.MIN_COVERAGE }}
+          sonar-project-key: ${{ github.repository_owner }}_${{ env.COMPONENTE }}
+          sonar-host-url: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    ETAPA DE SEGURIDAD: CÓDIGO                          ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  code-security:
+    name: Análisis de Seguridad de Código
+    needs: initialize
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          cache-key-prefix: ${{ needs.initialize.outputs.cache-key }}
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: java
+          queries: security-extended,security-and-quality
+
+      - name: Compilar para análisis CodeQL
+        run: mvn -B compile
+
+      - name: Analizar con CodeQL
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:java"
+          
+      - name: Análisis de seguridad adicional
+        uses: ./.github/actions/security-scan
+        with:
+          scan-type: 'code'
+          fail-on-severity: 'high'
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                 ETAPA DE SEGURIDAD: DEPENDENCIAS                       ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  dependency-security:
+    name: Análisis de Seguridad de Dependencias
+    needs: initialize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          cache-key-prefix: ${{ needs.initialize.outputs.cache-key }}
+
+      - name: Ejecutar escaneo de dependencias
+        uses: ./.github/actions/security-scan
+        with:
+          scan-type: 'dependencies'
+          fail-on-severity: 'high'
+        env:
+          MAVEN_OPTS: "-Xmx2g"
+          
+      - name: Generar reporte SBOM
+        run: mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+
+      - name: Publicar SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom-cyclonedx
+          path: target/bom.json
+          retention-days: 30
+
+      - name: Revisión de dependencias para PRs
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v3
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-1.0-only, LGPL-2.0-only
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE PRUEBAS: UNITARIAS                             ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  unit-tests:
+    name: Pruebas Unitarias
+    needs: initialize
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.initialize.outputs.matriz-test) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ matrix.java-version }}
+          cache-key-prefix: ${{ needs.initialize.outputs.cache-key }}
+
+      - name: Configurar base de datos PostgreSQL para pruebas
+        if: matrix.database == 'postgresql'
+        uses: docker://postgres:14-alpine
+        with:
+          env:
+            POSTGRES_DB: testdb
+            POSTGRES_USER: test
+            POSTGRES_PASSWORD: test123
+          ports:
+            - 5432:5432
+          options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      - name: Configurar propiedades de prueba específicas
+        run: |
+          if [ "${{ matrix.database }}" == "postgresql" ]; then
+            SPRING_PROFILES_ACTIVE=test,postgresql
+          else
+            SPRING_PROFILES_ACTIVE=test
+          fi
+          echo "SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE}" >> $GITHUB_ENV
+          echo "JACOCO_OUTPUT_DIR=target/jacoco-${{ matrix.database }}" >> $GITHUB_ENV
+
+      - name: Ejecutar pruebas unitarias
+        run: |
+          mvn -B test \
+            -Dspring.profiles.active=${SPRING_PROFILES_ACTIVE} \
+            -Djacoco.outputDir=${JACOCO_OUTPUT_DIR}
+
+      - name: Publicar resultados de pruebas JUnit
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: JUnit Tests - ${{ matrix.os }} - Java ${{ matrix.java-version }} - DB ${{ matrix.database }}
+          path: target/surefire-reports/*.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Guardar informes de cobertura
+        uses: actions/upload-artifact@v3
+        with:
+          name: jacoco-reports-${{ matrix.database }}
+          path: ${{ env.JACOCO_OUTPUT_DIR }}
+          retention-days: 7
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE PRUEBAS: INTEGRACIÓN                           ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  integration-tests:
+    name: Pruebas de Integración
+    needs: [initialize, unit-tests]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test123
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          cache-key-prefix: ${{ needs.initialize.outputs.cache-key }}
+
+      - name: Ejecutar pruebas de integración
+        run: |
+          mvn -B failsafe:integration-test \
+            -Dspring.profiles.active=test,postgresql \
+            -Djacoco.outputDir=target/jacoco-integration
+
+      - name: Publicar resultados de pruebas de integración
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Integration Tests
+          path: target/failsafe-reports/*.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Guardar informes de cobertura de integración
+        uses: actions/upload-artifact@v3
+        with:
+          name: jacoco-reports-integration
+          path: target/jacoco-integration
+          retention-days: 7
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE ANÁLISIS DE COBERTURA                          ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  coverage-report:
+    name: Informe de Cobertura
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Descargar informes de cobertura de unidad
+        uses: actions/download-artifact@v3
+        with:
+          name: jacoco-reports-h2
+          path: target/jacoco-h2
+
+      - name: Descargar informes de cobertura de integración
+        uses: actions/download-artifact@v3
+        with:
+          name: jacoco-reports-integration
+          path: target/jacoco-integration
+
+      - name: Fusionar y verificar informes de cobertura
+        run: |
+          mkdir -p target/jacoco-merged
+          # Generar informe consolidado
+          mvn -B jacoco:report
+          
+          # Verificar la cobertura mínima
+          mvn -B jacoco:check -Djacoco.minimum.coverage=${{ env.MIN_COVERAGE }}
+
+      - name: Publicar informe de cobertura en Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: target/site/jacoco/jacoco.xml
+          flags: unittests,integrationtests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: Guardar informe de cobertura como artefacto
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: target/site/jacoco
+          retention-days: 30
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE ANÁLISIS SONARQUBE                             ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  sonarqube:
+    name: Análisis SonarQube
+    needs: [initialize, unit-tests, code-security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Descargar informes de cobertura
+        uses: actions/download-artifact@v3
+        with:
+          name: jacoco-reports-h2
+          path: target/jacoco-h2
+
+      - name: Generar informe JaCoCo
+        run: mvn -B jacoco:report
+
+      - name: Ejecutar análisis SonarQube
+        if: env.SONAR_TOKEN != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PR_BRANCH="${{ github.head_ref }}"
+            PR_BASE="${{ github.base_ref }}"
+            mvn -B sonar:sonar \
+              -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.COMPONENTE }} \
+              -Dsonar.pullrequest.key=${{ github.event.pull_request.number }} \
+              -Dsonar.pullrequest.branch=$PR_BRANCH \
+              -Dsonar.pullrequest.base=$PR_BASE
+          else
+            mvn -B sonar:sonar \
+              -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.COMPONENTE }} \
+              -Dsonar.branch.name=${{ github.ref_name }}
+          fi
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE COMPILACIÓN Y EMPAQUETADO                       ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  build:
+    name: Compilar y Empaquetar
+    needs: [initialize, quality-check, dependency-security, sonarqube, coverage-report]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ needs.initialize.outputs.version }}
+      image-name: ${{ steps.image-info.outputs.image-name }}
+      image-tags: ${{ steps.image-info.outputs.image-tags }}
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno
+        uses: ./.github/actions/setup-environment
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          cache-key-prefix: ${{ needs.initialize.outputs.cache-key }}
+
+      - name: Compilar con Maven
+        run: |
+          mvn -B package \
+            -Drevision=${{ needs.initialize.outputs.version }} \
+            -DskipTests=true \
+            -Dmaven.javadoc.skip=true
+
+      - name: Verificar artefacto
+        run: |
+          # Verificación de existencia básica
+          if [ ! -f target/*.jar ]; then
+            echo "ERROR: No se encontró el artefacto JAR"
+            exit 1
+          fi
+          
+          # Identificar el artefacto principal
+          ARTIFACT=$(ls target/*.jar | grep -v "sources\|javadoc\|original" | head -1)
+          echo "Artefacto generado: $ARTIFACT"
+          echo "artifact_path=$ARTIFACT" >> $GITHUB_ENV
+          
+          # Verificación adicional del artefacto
+          echo "Verificando integridad del artefacto JAR..."
+          
+          # Comprobar que el JAR es un archivo válido
+          jar tf "$ARTIFACT" > /dev/null || {
+            echo "ERROR: El archivo JAR no es válido o está corrupto"
+            exit 1
+          }
+          
+          # Verificar tamaño mínimo
+          MIN_SIZE=1000000 # 1MB
+          ACTUAL_SIZE=$(stat -c%s "$ARTIFACT")
+          if [ "$ACTUAL_SIZE" -lt "$MIN_SIZE" ]; then
+            echo "ADVERTENCIA: El tamaño del JAR ($ACTUAL_SIZE bytes) es menor de lo esperado ($MIN_SIZE bytes)"
+          fi
+          
+          # Verificar presencia de clases principales
+          jar tf "$ARTIFACT" | grep -q "mx/gob/vucem/componente/VucemComponenteApplication.class" || {
+            echo "ADVERTENCIA: No se encontró la clase principal VucemComponenteApplication en el JAR"
+          }
+          
+          echo "Verificación del artefacto completada satisfactoriamente"
+
+      - name: Generar información de imagen
+        id: image-info
+        run: |
+          IMAGE_REPO="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.COMPONENTE }}"
+          echo "image-name=${IMAGE_REPO}" >> $GITHUB_OUTPUT
+          
+          # Definir tags basados en la rama
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Para main, usamos la versión, latest y sha corto
+            TAGS="${IMAGE_REPO}:${{ needs.initialize.outputs.version }},${IMAGE_REPO}:latest,${IMAGE_REPO}:sha-${{ needs.initialize.outputs.short-sha }}"
+          elif [[ "${{ github.ref }}" == "refs/heads/desarrollo" ]]; then
+            # Para desarrollo, usamos dev, sha corto y fecha actual
+            TAGS="${IMAGE_REPO}:dev,${IMAGE_REPO}:dev-${{ needs.initialize.outputs.short-sha }},${IMAGE_REPO}:dev-$(date +'%Y%m%d')"
+          elif [[ "${{ github.ref }}" == "refs/heads/release/"* ]]; then
+            # Para ramas de release, usamos rc-X.Y.Z
+            TAGS="${IMAGE_REPO}:${{ needs.initialize.outputs.version }},${IMAGE_REPO}:rc-${{ needs.initialize.outputs.short-sha }}"
+          else
+            # Para otras ramas, usamos nombre de rama, sha corto
+            BRANCH="${{ needs.initialize.outputs.branch-name }}"
+            TAGS="${IMAGE_REPO}:${BRANCH},${IMAGE_REPO}:${BRANCH}-${{ needs.initialize.outputs.short-sha }}"
+          fi
+          
+          echo "image-tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "Tags a publicar: ${TAGS}"
+
+      - name: Generar SBOM con CycloneDX
+        run: mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+
+      - name: Guardar artefactos
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.COMPONENTE }}-${{ needs.initialize.outputs.version }}
+          path: |
+            ${{ env.artifact_path }}
+            target/bom.json
+          retention-days: 14
+
+      - name: Generar informe de compilación
+        run: |
+          mkdir -p build-reports
+          echo "# Informe de Compilación" > build-reports/build-summary.md
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> build-reports/build-summary.md
+          echo "## Versión: ${{ needs.initialize.outputs.version }}" >> build-reports/build-summary.md
+          echo "## Branch: ${{ github.ref_name }}" >> build-reports/build-summary.md
+          echo "## Commit: ${{ github.sha }}" >> build-reports/build-summary.md
+          echo "## Artefacto: $(basename ${{ env.artifact_path }})" >> build-reports/build-summary.md
+          echo "## Tags de imagen:" >> build-reports/build-summary.md
+          echo '```' >> build-reports/build-summary.md
+          echo "${{ steps.image-info.outputs.image-tags }}" >> build-reports/build-summary.md
+          echo '```' >> build-reports/build-summary.md
+
+      - name: Publicar informes de compilación
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-reports
+          path: build-reports
+          retention-days: 7
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE CREACIÓN DE IMAGEN DOCKER                      ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  dockerize:
+    name: Construir Imagen Docker
+    needs: [initialize, build]
+    if: needs.initialize.outputs.should-deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Descargar artefactos de compilación
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ env.COMPONENTE }}-${{ needs.initialize.outputs.version }}
+          path: target
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Autenticar en Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir y publicar imagen Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ needs.build.outputs.image-tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          provenance: true
+          sbom: true
+          build-args: |
+            VERSION=${{ needs.initialize.outputs.version }}
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+            VCS_URL=${{ github.server_url }}/${{ github.repository }}
+            APPID=${{ env.APPID }}
+          labels: |
+            org.opencontainers.image.title=${{ env.COMPONENTE }}
+            org.opencontainers.image.version=${{ needs.initialize.outputs.version }}
+            org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            mx.gob.vucem.componente=${{ env.COMPONENTE }}
+            mx.gob.vucem.area=${{ env.NAMESPACE_K8S }}
+            mx.gob.vucem.appid=${{ env.APPID }}
+
+      # Utilizamos la acción de seguridad compuesta para escanear la imagen Docker
+      - name: Ejecutar escaneo de seguridad de contenedor
+        uses: ./.github/actions/security-scan
+        with:
+          scan-type: 'container'
+          fail-on-severity: 'high'
+          image-name: ${{ needs.build.outputs.image-name }}
+          image-tag: ${{ needs.initialize.outputs.short-sha }}
+          
+      - name: Publicar resultados de seguridad de Trivy
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'scan-results/container/trivy-results.sarif'
+          category: container-security
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE DESPLIEGUE: DESARROLLO                         ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  deploy-dev:
+    name: Desplegar a Desarrollo
+    needs: [initialize, dockerize]
+    if: |
+      needs.initialize.outputs.should-deploy == 'true' && 
+      (github.ref == 'refs/heads/desarrollo' || startsWith(github.ref, 'refs/heads/feature/'))
+    runs-on: ubuntu-latest
+    environment:
+      name: desarrollo
+      url: https://dev.${{ env.COMPONENTE }}.${{ vars.BASE_DOMAIN || 'vucem.gob.mx' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ejecutar despliegue
+        uses: ./.github/actions/deployment
+        with:
+          environment: dev
+          namespace: ${{ env.NAMESPACE_K8S }}-dev
+          image-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.COMPONENTE }}
+          image-tag: dev-${{ needs.initialize.outputs.short-sha }}
+          k8s-manifest-path: infrastructure/kubernetes/environments/dev
+          deployment-method: kustomize
+          wait-timeout: '180'
+        env:
+          K8S_SERVER: ${{ secrets.K8S_SERVER }}
+          K8S_SECRET: ${{ secrets.K8S_SECRET }}
+          
+      - name: Verificar estado de despliegue
+        run: |
+          echo "Pods desplegados en desarrollo:"
+          kubectl get pods -n ${{ env.NAMESPACE_K8S }}-dev -l app=${{ env.COMPONENTE }} -o wide
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE DESPLIEGUE: TESTING                            ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  deploy-test:
+    name: Desplegar a Testing
+    needs: [initialize, dockerize]
+    if: |
+      needs.initialize.outputs.should-deploy == 'true' && 
+      startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    environment:
+      name: testing
+      url: https://test.${{ env.COMPONENTE }}.${{ vars.BASE_DOMAIN || 'vucem.gob.mx' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ejecutar despliegue
+        uses: ./.github/actions/deployment
+        with:
+          environment: test
+          namespace: ${{ env.NAMESPACE_K8S }}-test
+          image-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.COMPONENTE }}
+          image-tag: rc-${{ needs.initialize.outputs.short-sha }}
+          k8s-manifest-path: infrastructure/kubernetes/environments/test
+          deployment-method: kustomize
+          wait-timeout: '180'
+        env:
+          K8S_SERVER: ${{ secrets.K8S_SERVER }}
+          K8S_SECRET: ${{ secrets.K8S_SECRET }}
+          
+      - name: Verificar estado de despliegue
+        run: |
+          echo "Pods desplegados en testing:"
+          kubectl get pods -n ${{ env.NAMESPACE_K8S }}-test -l app=${{ env.COMPONENTE }} -o wide
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                ETAPA DE NOTIFICACIÓN                                   ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  notify:
+    name: Notificar Resultado
+    needs: [initialize, build, dockerize, deploy-dev, deploy-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obtener estado
+        id: status
+        env:
+          BUILD_STATUS: ${{ needs.build.result }}
+          DOCKER_STATUS: ${{ needs.dockerize.result || 'skipped' }}
+          DEV_STATUS: ${{ needs.deploy-dev.result || 'skipped' }}
+          TEST_STATUS: ${{ needs.deploy-test.result || 'skipped' }}
+        run: |
+          if [[ "$BUILD_STATUS" == "success" ]]; then
+            echo "build_icon=✅" >> $GITHUB_OUTPUT
+          else
+            echo "build_icon=❌" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "$DOCKER_STATUS" == "success" ]]; then
+            echo "docker_icon=✅" >> $GITHUB_OUTPUT
+          elif [[ "$DOCKER_STATUS" == "skipped" ]]; then
+            echo "docker_icon=⏭️" >> $GITHUB_OUTPUT
+          else
+            echo "docker_icon=❌" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "$DEV_STATUS" == "success" ]]; then
+            echo "dev_icon=✅" >> $GITHUB_OUTPUT
+          elif [[ "$DEV_STATUS" == "skipped" ]]; then
+            echo "dev_icon=⏭️" >> $GITHUB_OUTPUT
+          else
+            echo "dev_icon=❌" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "$TEST_STATUS" == "success" ]]; then
+            echo "test_icon=✅" >> $GITHUB_OUTPUT
+          elif [[ "$TEST_STATUS" == "skipped" ]]; then
+            echo "test_icon=⏭️" >> $GITHUB_OUTPUT
+          else
+            echo "test_icon=❌" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generar informe final
+        run: |
+          mkdir -p ci-summary
+          
+          echo "# Informe CI/CD: ${{ env.COMPONENTE }}" > ci-summary/ci-summary.md
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> ci-summary/ci-summary.md
+          echo "## Branch: ${{ github.ref_name }}" >> ci-summary/ci-summary.md
+          echo "## Commit: ${{ github.sha }}" >> ci-summary/ci-summary.md
+          echo "## Versión: ${{ needs.initialize.outputs.version }}" >> ci-summary/ci-summary.md
+          echo "## Estado:" >> ci-summary/ci-summary.md
+          echo "- **Compilación**: ${{ steps.status.outputs.build_icon }}" >> ci-summary/ci-summary.md
+          echo "- **Imagen Docker**: ${{ steps.status.outputs.docker_icon }}" >> ci-summary/ci-summary.md
+          echo "- **Despliegue Dev**: ${{ steps.status.outputs.dev_icon }}" >> ci-summary/ci-summary.md
+          echo "- **Despliegue Test**: ${{ steps.status.outputs.test_icon }}" >> ci-summary/ci-summary.md
+          echo "" >> ci-summary/ci-summary.md
+          echo "## Enlaces:" >> ci-summary/ci-summary.md
+          echo "- [Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> ci-summary/ci-summary.md
+
+      - name: Publicar informe final
+        uses: actions/upload-artifact@v3
+        with:
+          name: ci-summary
+          path: ci-summary
+          retention-days: 30
+
+      - name: Enviar notificación
+        uses: ./.github/actions/notification
+        with:
+          notification-type: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
+          title: "Resultado CI - ${{ env.COMPONENTE }}"
+          message: "${{ github.repository }} - Pipeline #${{ github.run_number }}"
+          details: '[
+            {"type": "mrkdwn", "text": "*Rama:*\n${{ github.ref_name }}"},
+            {"type": "mrkdwn", "text": "*Commit:*\n${{ github.sha }}"},
+            {"type": "mrkdwn", "text": "*Versión:*\n${{ needs.initialize.outputs.version }}"},
+            {"type": "mrkdwn", "text": "*Autor:*\n${{ github.actor }}"},
+            {"type": "mrkdwn", "text": "*Build:* ${{ steps.status.outputs.build_icon }}"},
+            {"type": "mrkdwn", "text": "*Docker:* ${{ steps.status.outputs.docker_icon }}"},
+            {"type": "mrkdwn", "text": "*Dev:* ${{ steps.status.outputs.dev_icon }}"},
+            {"type": "mrkdwn", "text": "*Test:* ${{ steps.status.outputs.test_icon }}"}
+          ]'
+          action-url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action-text: "Ver Pipeline"
+          channels: "slack"
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
