@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Preguntas y Soporte
+    url:
+    about: Por favor dirija sus preguntas al canal de soporte
+  - name: Documentación del Proyecto
+    url:
+    about: Consulte nuestra documentación para resolver dudas comunes

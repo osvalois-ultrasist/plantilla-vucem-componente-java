@@ -486,9 +486,50 @@ Cada ejecución del pipeline genera los siguientes artefactos:
 - Optimización de recursos de computación
 - Acciones idempotentes y repetibles
 
-## 9. Apéndices
+## 9. Variables y Secretos Requeridos
 
-### 9.1 Referencias
+Para el correcto funcionamiento de los pipelines de CI/CD en GitHub Actions, se requiere configurar las siguientes variables y secretos:
+
+### 9.1 Variables de Entorno (Variables)
+
+#### Variables Globales
+- `COMPONENTE_NOMBRE`: Nombre del componente (default: 'vucem-componente')
+- `COMPONENTE_AREA`: Área del componente para el namespace (default: 'default')
+- `BASE_DOMAIN`: Dominio base para URLs de aplicación (default: 'vucem.gob.mx')
+- `SONAR_HOST_URL`: URL del servidor SonarQube (default: 'https://sonarcloud.io')
+- `SLACK_WEBHOOK_URL`: URL para webhook de notificaciones a Slack
+
+#### Variables Opcionales
+- `TEAMS_WEBHOOK_URL`: URL para webhook de notificaciones a Microsoft Teams
+- `SPRING_DATASOURCE_URL`: URL de conexión a base de datos
+- `SPRING_DATASOURCE_USERNAME`: Usuario de base de datos
+- `SPRING_PROFILES_ACTIVE`: Perfil de Spring activo
+- `KUBERNETES_NAMESPACE`: Namespace para despliegue
+- `DEPLOYMENT_ENVIRONMENT`: Entorno de despliegue
+
+### 9.2 Secretos (Secrets)
+
+#### Secretos Críticos
+- `GITHUB_TOKEN`: Token automático de GitHub para acciones básicas
+- `ADMIN_TOKEN`: Token con permisos administrativos para configuración de protección de ramas
+- `SONAR_TOKEN`: Token de autenticación para SonarQube/SonarCloud
+- `JWT_SECRET`: Clave para firmar tokens JWT
+- `SPRING_DATASOURCE_PASSWORD`: Contraseña de base de datos
+- `REGISTRY_PASSWORD`: Contraseña del registro de contenedores
+
+#### Secretos para Kubernetes
+- `K8S_SERVER`: URL del servidor de Kubernetes
+- `K8S_SECRET`: Credenciales de acceso al cluster de Kubernetes (normalmente kubeconfig)
+- `KUBE_CONFIG`: Configuración completa de Kubernetes
+
+#### Configuración específica por entorno
+Se requieren configuraciones separadas para cada entorno (dev, test, qa, uat, prod) con los siguientes secretos:
+- `K8S_SERVER`: Específico para cada entorno
+- `K8S_SECRET`: Específico para cada entorno
+
+## 10. Apéndices
+
+### 10.1 Referencias
 
 - [GitHub Actions Documentation](https://docs.github.com/es/actions)
 - [Maven Build Lifecycle](https://maven.apache.org/guides/introduction/introduction-to-the-lifecycle.html)
@@ -497,8 +538,9 @@ Cada ejecución del pipeline genera los siguientes artefactos:
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [CycloneDX SBOM Standard](https://cyclonedx.org/)
 
-### 9.2 Historial de Revisiones
+### 10.2 Historial de Revisiones
 
 | Fecha | Versión | Descripción | Autor        |
 |-------|---------|-------------|--------------|
 | 2025-03-19 | 1.0 | Versión inicial | Oscar Valois |
+| 2025-03-19 | 1.1 | Adición de sección de Variables y Secretos | Oscar Valois |
