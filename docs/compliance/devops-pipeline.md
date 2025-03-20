@@ -425,7 +425,6 @@ gitGraph:
 | Desarrollo | Rolling update | Rama `desarrollo` y `feature/*` | Automática |
 | Testing | Blue/Green | Rama `release/*` | Automática |
 | QA | Blue/Green | Tag específico | Manual |
-| UAT | Canary | Tag específico | Manual, validación gradual |
 | Producción | Canary | Tag estable | Manual con múltiples aprobaciones |
 
 ### 6.3 Rollback y Recuperación

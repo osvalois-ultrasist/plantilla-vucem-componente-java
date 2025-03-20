@@ -1,0 +1,24 @@
+name: Branch Protection Enforcement
+
+on:
+  repository_dispatch:
+    types: [update-branch-protection]
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    paths:
+      - '.github/branch-protection.yml'
+    branches:
+      - main
+
+jobs:
+  enforce-protection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Apply Branch Protection Rules
+        uses: nagygergo/branch-protection-bot@main
+        with:
+          config-path: '.github/branch-protection.yml'
+          repo-token: ${{ secrets.ADMIN_TOKEN }}
