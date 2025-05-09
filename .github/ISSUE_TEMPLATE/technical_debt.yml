@@ -1,0 +1,80 @@
+name: Deuda Técnica
+description: Reportar deuda técnica o mejoras de código
+title: "[TECH-DEBT]: "
+labels: ["technical-debt", "refactoring"]
+assignees:
+  - equipo-arquitectura
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use este formulario para reportar aspectos del código que requieren refactorización, mejoras de arquitectura o solución de deuda técnica.
+
+  - type: input
+    id: ubicacion
+    attributes:
+      label: Ubicación del código
+      description: ¿Dónde se encuentra el código que necesita mejora? (paquete/clase/método)
+      placeholder: "mx.gob.vucem.componente.infrastructure.persistence.repositories"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tipo-deuda
+    attributes:
+      label: Tipo de deuda técnica
+      description: ¿Qué tipo de problema técnico ha identificado?
+      options:
+        - Arquitectura subóptima
+        - Código duplicado
+        - Falta de pruebas
+        - Diseño de clases inadecuado
+        - Problemas de rendimiento
+        - Complejidad excesiva
+        - Otro (especificar en la descripción)
+    validations:
+      required: true
+
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Descripción del problema
+      description: Describa el problema técnico identificado y por qué considera que debería mejorarse.
+      placeholder: La clase RecursoRepositoryImpl tiene demasiadas responsabilidades y viola el principio de responsabilidad única...
+    validations:
+      required: true
+
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Propuesta de solución
+      description: Proporcione una sugerencia de cómo podría mejorarse o refactorizarse el código.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impacto
+    attributes:
+      label: Impacto en el proyecto
+      description: ¿Qué impacto tendría no abordar esta deuda técnica?
+      options:
+        - Crítico (bloquea el desarrollo futuro)
+        - Alto (ralentiza significativamente el desarrollo)
+        - Medio (causa problemas ocasionales)
+        - Bajo (principalmente estético/mejores prácticas)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: esfuerzo
+    attributes:
+      label: Esfuerzo estimado
+      description: ¿Cuánto esfuerzo cree que requeriría solucionar este problema?
+      options:
+        - Pequeño (menos de 1 día)
+        - Medio (1-3 días)
+        - Grande (3-7 días)
+        - Muy grande (más de 1 sprint)
+    validations:
+      required: true

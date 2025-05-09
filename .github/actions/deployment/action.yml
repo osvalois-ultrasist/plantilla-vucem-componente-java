@@ -1,0 +1,205 @@
+#.github/workflows/actions/deployment/action.yml
+name: 'Deployment'
+description: 'Despliega aplicaciones VUCEM en diferentes entornos'
+
+inputs:
+  environment:
+    description: 'Entorno al que se desplegará (dev, test, qa, uat, prod)'
+    required: true
+  namespace:
+    description: 'Namespace de Kubernetes'
+    required: true
+  image-name:
+    description: 'Nombre completo de la imagen'
+    required: true
+  image-tag:
+    description: 'Tag de la imagen'
+    required: true
+  k8s-manifest-path:
+    description: 'Ruta a los manifiestos de Kubernetes'
+    required: true
+  helm-chart-path:
+    description: 'Ruta al chart de Helm (si se usa helm)'
+    required: false
+    default: ''
+  deployment-method:
+    description: 'Método de despliegue (kubectl, kustomize, helm)'
+    required: false
+    default: 'kustomize'
+  wait-timeout:
+    description: 'Tiempo de espera para la disponibilidad en segundos'
+    required: false
+    default: '300'
+  verify-deployment:
+    description: 'Verificar despliegue después de aplicar'
+    required: false
+    default: 'true'
+  config-branch:
+    description: 'Rama de configuración externa a utilizar'
+    required: false
+    default: 'main'
+  config-repo:
+    description: 'Repositorio de configuración externa'
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configurar Kubectl
+      shell: bash
+      run: |
+        echo "Configurando Kubectl..."
+        
+        # Verificar que las credenciales de Kubernetes estén configuradas
+        if [ -z "$K8S_SERVER" ] || [ -z "$K8S_SECRET" ]; then
+          echo "ERROR: Las credenciales de Kubernetes no están configuradas correctamente."
+          echo "Asegúrate de que K8S_SERVER y K8S_SECRET estén definidas como variables de entorno."
+          exit 1
+        fi
+        
+        # Usar variables de entorno o secretos de GitHub Actions
+        echo "$K8S_SECRET" > /tmp/kube-config
+        export KUBECONFIG=/tmp/kube-config
+        
+        # Verificar la conexión con el clúster
+        kubectl cluster-info || { echo "Error al conectar con el clúster de Kubernetes"; exit 1; }
+        
+        echo "Kubectl configurado correctamente."
+      env:
+        K8S_SERVER: ${{ env.K8S_SERVER }}
+        K8S_SECRET: ${{ env.K8S_SECRET }}
+
+    - name: Configurar herramientas de despliegue
+      shell: bash
+      run: |
+        echo "Configurando herramientas de despliegue..."
+        
+        # Instalar o verificar kustomize si es necesario
+        if [ "${{ inputs.deployment-method }}" == "kustomize" ]; then
+          echo "Configurando Kustomize..."
+          kustomize version || {
+            curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+            sudo mv kustomize /usr/local/bin/
+          }
+        fi
+        
+        # Instalar o verificar Helm si es necesario
+        if [ "${{ inputs.deployment-method }}" == "helm" ]; then
+          echo "Configurando Helm..."
+          helm version || {
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          }
+        fi
+        
+        echo "Herramientas de despliegue configuradas correctamente."
+
+    - name: Obtener configuración externa (si existe)
+      if: inputs.config-repo != ''
+      shell: bash
+      run: |
+        echo "Obteniendo configuración externa desde ${{ inputs.config-repo }}..."
+        
+        # Crear directorio temporal para la configuración
+        mkdir -p /tmp/external-config
+        
+        # Clonar repositorio de configuración
+        git clone --depth 1 --branch ${{ inputs.config-branch }} ${{ inputs.config-repo }} /tmp/external-config
+        
+        # Copiar configuración específica del entorno si existe
+        if [ -d "/tmp/external-config/${{ inputs.environment }}" ]; then
+          echo "Encontrada configuración para el entorno ${{ inputs.environment }}"
+          cp -r /tmp/external-config/${{ inputs.environment }}/* ${{ inputs.k8s-manifest-path }}/ || true
+        else
+          echo "No se encontró configuración específica para el entorno ${{ inputs.environment }}"
+        fi
+        
+        echo "Configuración externa aplicada."
+
+    - name: Desplegar con Kustomize
+      if: inputs.deployment-method == 'kustomize'
+      shell: bash
+      run: |
+        echo "Desplegando con Kustomize a ${{ inputs.environment }}..."
+        
+        cd ${{ inputs.k8s-manifest-path }}
+        
+        # Actualizar la imagen con la versión especificada
+        kustomize edit set image ${{ inputs.image-name }}=${{ inputs.image-name }}:${{ inputs.image-tag }}
+        
+        # Mostrar manifiesto que se va a aplicar
+        echo "Manifiesto a aplicar:"
+        kustomize build . | tee /tmp/kubernetes-manifest.yaml
+        
+        # Aplicar los cambios
+        kubectl apply -f /tmp/kubernetes-manifest.yaml --namespace=${{ inputs.namespace }}
+        
+        echo "Despliegue con Kustomize completado."
+
+    - name: Desplegar con Helm
+      if: inputs.deployment-method == 'helm'
+      shell: bash
+      run: |
+        echo "Desplegando con Helm a ${{ inputs.environment }}..."
+        
+        # Verificar que la ruta del chart exista
+        if [ ! -d "${{ inputs.helm-chart-path }}" ]; then
+          echo "ERROR: No se encontró el chart de Helm en la ruta especificada: ${{ inputs.helm-chart-path }}"
+          exit 1
+        fi
+        
+        # Obtener nombre del chart
+        CHART_NAME=$(basename ${{ inputs.helm-chart-path }})
+        RELEASE_NAME="${CHART_NAME}-${{ inputs.environment }}"
+        
+        # Desplegar con Helm
+        helm upgrade --install $RELEASE_NAME ${{ inputs.helm-chart-path }} \
+          --namespace ${{ inputs.namespace }} \
+          --create-namespace \
+          --set image.repository=${{ inputs.image-name }} \
+          --set image.tag=${{ inputs.image-tag }} \
+          --set environment=${{ inputs.environment }} \
+          --wait
+        
+        echo "Despliegue con Helm completado."
+
+    - name: Desplegar con Kubectl
+      if: inputs.deployment-method == 'kubectl'
+      shell: bash
+      run: |
+        echo "Desplegando con Kubectl a ${{ inputs.environment }}..."
+        
+        # Verificar que el manifiesto exista
+        if [ ! -f "${{ inputs.k8s-manifest-path }}" ]; then
+          echo "ERROR: No se encontró el manifiesto de Kubernetes en la ruta especificada: ${{ inputs.k8s-manifest-path }}"
+          exit 1
+        fi
+        
+        # Sustituir imagen en el manifiesto (usando sed)
+        sed -i "s|image:.*|image: ${{ inputs.image-name }}:${{ inputs.image-tag }}|g" ${{ inputs.k8s-manifest-path }}
+        
+        # Aplicar el manifiesto
+        kubectl apply -f ${{ inputs.k8s-manifest-path }} --namespace=${{ inputs.namespace }}
+        
+        echo "Despliegue con Kubectl completado."
+
+    - name: Verificar despliegue
+      if: inputs.verify-deployment == 'true'
+      shell: bash
+      run: |
+        echo "Verificando despliegue en ${{ inputs.environment }}..."
+        
+        # Extraer nombre del despliegue del manifiesto (podría mejorarse para ser más robusto)
+        DEPLOYMENT_NAME=$(basename ${{ inputs.image-name }})
+        
+        # Verificar rollout del despliegue
+        kubectl rollout status deployment/$DEPLOYMENT_NAME -n ${{ inputs.namespace }} --timeout=${{ inputs.wait-timeout }}s
+        
+        # Mostrar recursos desplegados
+        echo "Pods desplegados:"
+        kubectl get pods -n ${{ inputs.namespace }} -l app=$DEPLOYMENT_NAME -o wide
+        
+        echo "Servicios desplegados:"
+        kubectl get services -n ${{ inputs.namespace }} -l app=$DEPLOYMENT_NAME
+        
+        echo "Verificación de despliegue completada con éxito."

@@ -1,0 +1,83 @@
+name: Reporte de Error
+description: Reportar un error o comportamiento inesperado
+title: "[BUG]: "
+labels: ["bug", "triage"]
+assignees:
+  - equipo-soporte
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por tomarse el tiempo para completar este reporte de error.
+
+  - type: input
+    id: version
+    attributes:
+      label: Versión
+      description: ¿Qué versión del componente está utilizando?
+      placeholder: "v1.2.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ambiente
+    attributes:
+      label: Ambiente
+      description: ¿En qué ambiente se presentó el error?
+      options:
+        - Desarrollo
+        - QA
+        - UAT
+        - Producción
+    validations:
+      required: true
+
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Descripción del error
+      description: Proporcione una descripción clara y concisa del error.
+      placeholder: Al intentar guardar un recurso con caracteres especiales, el sistema muestra un error 500...
+    validations:
+      required: true
+
+  - type: textarea
+    id: pasos
+    attributes:
+      label: Pasos para reproducir
+      description: Enumere los pasos para reproducir el comportamiento.
+      placeholder: |
+        1. Iniciar sesión como administrador
+        2. Navegar a '...'
+        3. Hacer clic en '....'
+        4. Ver el error
+    validations:
+      required: true
+
+  - type: textarea
+    id: comportamiento-esperado
+    attributes:
+      label: Comportamiento esperado
+      description: Describa lo que esperaba que sucediera.
+    validations:
+      required: true
+
+  - type: textarea
+    id: capturas
+    attributes:
+      label: Capturas de pantalla o logs
+      description: Si aplica, agregue capturas de pantalla o logs para ayudar a explicar su problema.
+
+  - type: dropdown
+    id: impacto
+    attributes:
+      label: Nivel de impacto
+      description: ¿Cuál es el impacto de este error en las operaciones?
+      options:
+        - Crítico (bloquea operaciones críticas)
+        - Alto (afecta significativamente la funcionalidad)
+        - Medio (afecta algunas funciones pero existe alternativa)
+        - Bajo (problema menor)
+    validations:
+      required: true

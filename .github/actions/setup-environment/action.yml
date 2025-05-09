@@ -1,0 +1,58 @@
+#.github/workflows/actions/setup-enviroment/action.yml
+name: 'Setup Development Environment'
+description: 'Configura el entorno de desarrollo para VUCEM con Java, Maven y dependencias comunes'
+
+inputs:
+  java-version:
+    description: 'Versión de Java a utilizar'
+    required: false
+    default: '21'
+  java-distribution:
+    description: 'Distribución de Java a utilizar'
+    required: false
+    default: 'temurin'
+  maven-cache:
+    description: 'Activar caché de Maven'
+    required: false
+    default: 'true'
+  cache-key-prefix:
+    description: 'Prefijo para clave de caché'
+    required: false
+    default: 'vucem-deps'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configurar JDK ${{ inputs.java-version }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: ${{ inputs.java-distribution }}
+        cache: ${{ inputs.maven-cache == 'true' && 'maven' || '' }}
+
+    - name: Calcular clave de caché para dependencias
+      id: cache-key
+      shell: bash
+      run: |
+        CACHE_HASH=$(find . -type f -name "pom.xml" -exec md5sum {} \; | sort | md5sum | cut -d ' ' -f1)
+        echo "key=${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ inputs.java-version }}-${CACHE_HASH}" >> $GITHUB_OUTPUT
+        echo "Clave de caché calculada: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ inputs.java-version }}-${CACHE_HASH}"
+
+    - name: Cargar dependencias (caché)
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ steps.cache-key.outputs.key }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-${{ inputs.java-version }}-
+
+    - name: Verificar versiones instaladas
+      shell: bash
+      run: |
+        echo "Versión de Java:"
+        java -version
+        echo ""
+        echo "Versión de Maven:"
+        mvn --version
+        echo ""
+        echo "Entorno de desarrollo configurado correctamente."

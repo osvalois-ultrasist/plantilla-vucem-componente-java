@@ -1,0 +1,139 @@
+name: 'Notification System'
+description: 'Sistema unificado de notificaciones para flujos de trabajo de VUCEM'
+
+inputs:
+  notification-type:
+    description: 'Tipo de notificación (success, failure, warning, info)'
+    required: true
+    default: 'info'
+  title:
+    description: 'Título de la notificación'
+    required: true
+  message:
+    description: 'Mensaje principal de la notificación'
+    required: true
+  details:
+    description: 'Detalles adicionales en formato JSON (campos y valores)'
+    required: false
+    default: '{}'
+  action-url:
+    description: 'URL para el botón de acción'
+    required: false
+    default: ''
+  action-text:
+    description: 'Texto para el botón de acción'
+    required: false
+    default: 'Ver Detalles'
+  channels:
+    description: 'Canales de notificación (slack, teams, email, webhook)'
+    required: false
+    default: 'slack'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configurar icono y color por tipo
+      id: style
+      shell: bash
+      run: |
+        # Establecer icono según tipo de notificación
+        case "${{ inputs.notification-type }}" in
+          success)
+            echo "icon=✅" >> $GITHUB_OUTPUT
+            echo "color=good" >> $GITHUB_OUTPUT
+            echo "emoji=:white_check_mark:" >> $GITHUB_OUTPUT
+            ;;
+          failure)
+            echo "icon=❌" >> $GITHUB_OUTPUT
+            echo "color=danger" >> $GITHUB_OUTPUT
+            echo "emoji=:x:" >> $GITHUB_OUTPUT
+            ;;
+          warning)
+            echo "icon=⚠️" >> $GITHUB_OUTPUT
+            echo "color=warning" >> $GITHUB_OUTPUT
+            echo "emoji=:warning:" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "icon=ℹ️" >> $GITHUB_OUTPUT
+            echo "color=3366CC" >> $GITHUB_OUTPUT
+            echo "emoji=:information_source:" >> $GITHUB_OUTPUT
+            ;;
+        esac
+
+    - name: Notificar vía Slack
+      if: contains(inputs.channels, 'slack') && env.SLACK_WEBHOOK_URL != ''
+      uses: slackapi/slack-github-action@v1.24.0
+      with:
+        payload: |
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "${{ steps.style.outputs.icon }} ${{ inputs.title }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "${{ inputs.message }}"
+                }
+              },
+              ${{ inputs.details != '{}' && format('{{"type": "section", "fields": {0}}},', inputs.details) || '' }}
+              ${{ inputs.action-url != '' && format('{{"type": "actions", "elements": [{{"type": "button", "text": {{"type": "plain_text", "text": "{0}"}}, "url": "{1}"}}]}}', inputs.action-text, inputs.action-url) || '' }}
+            ]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        
+    - name: Notificar vía Teams
+      if: contains(inputs.channels, 'teams') && env.TEAMS_WEBHOOK_URL != ''
+      shell: bash
+      run: |
+        # Crear payload para MS Teams
+        TEAMS_PAYLOAD='{
+          "@type": "MessageCard",
+          "@context": "http://schema.org/extensions",
+          "themeColor": "'${{ steps.style.outputs.color }}'",
+          "summary": "${{ inputs.title }}",
+          "sections": [{
+            "activityTitle": "${{ inputs.title }}",
+            "activitySubtitle": "Enviado desde GitHub Actions",
+            "activityImage": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+            "text": "${{ inputs.message }}"
+          }'
+        
+        # Añadir detalles si existen
+        if [[ "${{ inputs.details }}" != "{}" ]]; then
+          DETAILS_JSON='${{ inputs.details }}'
+          # Extraer los campos y formatearlos para Teams
+          # (simplificado, en un caso real necesitaría parseo JSON)
+          TEAMS_PAYLOAD+=', {"facts": '$DETAILS_JSON'}'
+        fi
+        
+        # Añadir acción si existe
+        if [[ -n "${{ inputs.action-url }}" ]]; then
+          TEAMS_PAYLOAD+=', {"potentialAction": [{"@type": "OpenUri", "name": "${{ inputs.action-text }}", "targets": [{"os": "default", "uri": "${{ inputs.action-url }}"}]}]}'
+        fi
+        
+        # Cerrar el JSON
+        TEAMS_PAYLOAD+=']}' 
+        
+        # Enviar a Teams
+        curl -H "Content-Type: application/json" -d "$TEAMS_PAYLOAD" "$TEAMS_WEBHOOK_URL"
+      env:
+        TEAMS_WEBHOOK_URL: ${{ env.TEAMS_WEBHOOK_URL }}
+        
+    # Registro de la notificación para auditoría
+    - name: Registrar notificación
+      shell: bash
+      run: |
+        echo "Notificación enviada:"
+        echo "Tipo: ${{ inputs.notification-type }}"
+        echo "Título: ${{ inputs.title }}"
+        echo "Mensaje: ${{ inputs.message }}"
+        echo "Canales: ${{ inputs.channels }}"
+        echo "Fecha: $(date +'%Y-%m-%d %H:%M:%S')"

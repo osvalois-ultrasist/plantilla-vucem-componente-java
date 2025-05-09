@@ -1,0 +1,66 @@
+name: Solicitud de Documentación
+description: Solicitar mejoras o correcciones en la documentación
+title: "[DOCS]: "
+labels: ["documentation"]
+assignees:
+  - equipo-documentacion
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por ayudarnos a mejorar la documentación del proyecto VUCEM.
+
+  - type: dropdown
+    id: tipo-documento
+    attributes:
+      label: Tipo de documentación
+      description: ¿Qué tipo de documentación necesita ser mejorada?
+      options:
+        - README
+        - Guía de usuario
+        - Guía de desarrollo
+        - Documentación de API
+        - Arquitectura
+        - Diagramas
+        - Otro (especificar en la descripción)
+    validations:
+      required: true
+
+  - type: input
+    id: ubicacion
+    attributes:
+      label: Ubicación del documento
+      description: Proporcione la ruta al documento que necesita mejoras (si existe)
+      placeholder: "docs/manual/guia-desarrollo.md"
+    validations:
+      required: false
+
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Descripción del problema o mejora
+      description: Describa qué información falta, es incorrecta o debe ser mejorada
+      placeholder: La sección sobre configuración de seguridad no incluye información sobre...
+    validations:
+      required: true
+
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Propuesta de mejora
+      description: Si tiene sugerencias específicas sobre el contenido que debería incluirse, por favor proporciónelas
+    validations:
+      required: false
+
+  - type: dropdown
+    id: prioridad
+    attributes:
+      label: Prioridad sugerida
+      description: Indique la prioridad que considera debe tener esta solicitud
+      options:
+        - Alta (bloquea el trabajo de desarrollo)
+        - Media (limita el entendimiento pero no bloquea)
+        - Baja (sería útil pero no es crítico)
+    validations:
+      required: true

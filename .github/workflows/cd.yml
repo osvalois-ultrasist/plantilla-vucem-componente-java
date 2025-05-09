@@ -1,0 +1,302 @@
+#.github/workflows/cd.yml
+name: CD Pipeline
+
+env:
+  REGISTRY: ghcr.io
+  COMPONENTE: ${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+  NAMESPACE_K8S: vucem-${{ vars.COMPONENTE_AREA || 'default' }}
+  JAVA_VERSION: '21'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Entorno de despliegue'
+        required: true
+        default: 'qa'
+        type: choice
+        options:
+          - qa
+          - uat
+          - prod
+      version:
+        description: 'Versión a desplegar (tag de imagen)'
+        required: true
+        type: string
+      config_version:
+        description: 'Versión de configuración a usar'
+        required: false
+        default: 'latest'
+        type: string
+      approve_timeout:
+        description: 'Tiempo de espera para aprobación (minutos)'
+        required: false
+        default: '60'
+        type: number
+      debug:
+        description: 'Habilitar modo debug para más información'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: vucem-deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validar Parámetros
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.set-vars.outputs.image }}
+      config_repo: ${{ steps.set-vars.outputs.config_repo }}
+      approve_timeout: ${{ steps.set-vars.outputs.approve_timeout }}
+      short_sha: ${{ steps.set-vars.outputs.short_sha }}
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validar Entorno
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          if [[ "$ENV" != "qa" && "$ENV" != "uat" && "$ENV" != "prod" ]]; then
+            echo "ERROR: Entorno no válido: $ENV"
+            exit 1
+          fi
+          echo "Entorno validado: $ENV"
+
+      - name: Validar Versión
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [[ -z "$VERSION" ]]; then
+            echo "ERROR: Se requiere una versión para el despliegue"
+            exit 1
+          fi
+          echo "Versión validada: $VERSION"
+
+      - name: Establecer Variables
+        id: set-vars
+        run: |
+          # Establecer imagen completa
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.COMPONENTE }}:${{ github.event.inputs.version }}"
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "Imagen a desplegar: ${IMAGE}"
+          
+          # Establecer repositorio de configuración
+          CONFIG_REPO="${{ github.repository_owner }}/config-${{ env.COMPONENTE }}"
+          echo "config_repo=${CONFIG_REPO}" >> $GITHUB_OUTPUT
+          echo "Repositorio de configuración: ${CONFIG_REPO}"
+          
+          # Establecer tiempo de espera para aprobación
+          APPROVE_TIMEOUT="${{ github.event.inputs.approve_timeout }}"
+          echo "approve_timeout=${APPROVE_TIMEOUT}" >> $GITHUB_OUTPUT
+          
+          # Obtener SHA corto para referencias
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+  preprodution-checks:
+    name: Verificaciones Pre-Producción
+    needs: validate
+    if: github.event.inputs.environment == 'prod'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar imagen en ambientes previos
+        run: |
+          echo "Verificando si la imagen ${{ needs.validate.outputs.image }} ha sido desplegada en ambientes previos"
+          # Aquí debería haber una verificación real, por ejemplo consultando un registro o API
+          # Si no se encuentra la imagen en QA o UAT, se debería fallar el despliegue
+          # Por ahora es solo informativo
+          echo "NOTA: En un entorno real, verificaríamos que esta imagen haya sido probada en QA y UAT antes de producción"
+
+      - name: Verificar pruebas de seguridad
+        run: |
+          echo "Verificando resultados de escaneos de seguridad para ${{ needs.validate.outputs.image }}"
+          # Aquí debería haber una verificación real de los resultados de seguridad
+          # Por ahora es solo informativo
+          echo "NOTA: En un entorno real, verificaríamos que esta imagen haya pasado todos los escaneos de seguridad"
+
+  deploy-checks:
+    name: Verificar Entorno de Despliegue
+    needs: [validate, preprodution-checks]
+    if: always() && (needs.preprodution-checks.result == 'success' || needs.preprodution-checks.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Verificar Conectividad
+        run: |
+          echo "Verificando conectividad con el entorno ${{ github.event.inputs.environment }}"
+          if [[ "${{ secrets.K8S_SERVER }}" == "" ]]; then
+            echo "ERROR: No se ha configurado K8S_SERVER para el entorno"
+            exit 1
+          fi
+          
+          # En producción real se verificaría la conectividad con el cluster
+          echo "Conectividad verificada"
+
+  approval:
+    name: Aprobación de Despliegue
+    needs: [validate, deploy-checks]
+    if: github.event.inputs.environment == 'prod'
+    runs-on: ubuntu-latest
+    environment:
+      name: production-approval
+    timeout-minutes: ${{ fromJson(needs.validate.outputs.approve_timeout) }}
+    steps:
+      - name: Aprobación Recibida
+        run: |
+          echo "Despliegue a producción aprobado por: ${{ github.actor }}"
+          echo "Fecha de aprobación: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+  deploy:
+    name: Desplegar a ${{ github.event.inputs.environment }}
+    needs: [validate, deploy-checks, approval]
+    if: always() && (needs.approval.result == 'success' || needs.approval.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: https://${{ github.event.inputs.environment == 'prod' && '' || github.event.inputs.environment == 'qa' && 'qa.' || 'uat.' }}${{ env.COMPONENTE }}.${{ vars.BASE_DOMAIN || 'vucem.gob.mx' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ejecutar despliegue
+        uses: ./.github/actions/deployment
+        with:
+          environment: ${{ github.event.inputs.environment }}
+          namespace: ${{ env.NAMESPACE_K8S }}-${{ github.event.inputs.environment }}
+          image-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.COMPONENTE }}
+          image-tag: ${{ github.event.inputs.version }}
+          k8s-manifest-path: infrastructure/kubernetes/environments/${{ github.event.inputs.environment }}
+          deployment-method: kustomize
+          wait-timeout: '300'
+          config-repo: ${{ needs.validate.outputs.config_repo }}
+          config-branch: ${{ github.event.inputs.config_version }}
+        env:
+          K8S_SERVER: ${{ secrets.K8S_SERVER }}
+          K8S_SECRET: ${{ secrets.K8S_SECRET }}
+
+      - name: Verificar estado
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          NAMESPACE="${{ env.NAMESPACE_K8S }}-${ENV}"
+          APP_NAME="${{ env.COMPONENTE }}"
+          
+          echo "Verificando pods:"
+          kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME} -o wide
+          
+          echo "Verificando servicios:"
+          kubectl get services -n ${NAMESPACE} -l app=${APP_NAME}
+          
+          echo "Verificando ingress:"
+          kubectl get ingress -n ${NAMESPACE} -l app=${APP_NAME}
+          
+          echo "Verificando configuración:"
+          kubectl get configmap -n ${NAMESPACE} -l app=${APP_NAME}
+          
+          echo "Verificando secretos:"
+          kubectl get secret -n ${NAMESPACE} -l app=${APP_NAME} --template='{{range .items}}{{.metadata.name}}{{"\n"}}{{end}}'
+          
+          # Verificación adicional post-despliegue
+          echo "Ejecutando verificaciones post-despliegue..."
+          
+          # 1. Verificar estado de pods y confirmar que están en 'Running'
+          RUNNING_PODS=$(kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | wc -w)
+          TOTAL_PODS=$(kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME} --no-headers | wc -l)
+          
+          if [ "$RUNNING_PODS" -eq "$TOTAL_PODS" ] && [ "$TOTAL_PODS" -gt 0 ]; then
+            echo "✅ Todos los pods ($RUNNING_PODS/$TOTAL_PODS) están en estado Running"
+          else
+            echo "⚠️ Sólo $RUNNING_PODS de $TOTAL_PODS pods están en estado Running"
+            kubectl describe pods -n ${NAMESPACE} -l app=${APP_NAME}
+          fi
+          
+          # 2. Verificar endpoints de servicio
+          ENDPOINTS=$(kubectl get endpoints -n ${NAMESPACE} -l app=${APP_NAME} -o jsonpath='{.items[0].subsets[0].addresses}')
+          if [ -n "$ENDPOINTS" ]; then
+            echo "✅ Servicio tiene endpoints activos"
+          else
+            echo "⚠️ Servicio no tiene endpoints activos"
+            kubectl describe endpoints -n ${NAMESPACE} -l app=${APP_NAME}
+          fi
+          
+          # 3. Verificar estado de despliegue (readiness/liveness)
+          AVAILABLE_REPLICAS=$(kubectl get deployment -n ${NAMESPACE} -l app=${APP_NAME} -o jsonpath='{.items[0].status.availableReplicas}')
+          DESIRED_REPLICAS=$(kubectl get deployment -n ${NAMESPACE} -l app=${APP_NAME} -o jsonpath='{.items[0].status.replicas}')
+          
+          if [ "$AVAILABLE_REPLICAS" == "$DESIRED_REPLICAS" ] && [ -n "$DESIRED_REPLICAS" ]; then
+            echo "✅ Todas las réplicas deseadas están disponibles ($AVAILABLE_REPLICAS/$DESIRED_REPLICAS)"
+          else
+            echo "⚠️ No todas las réplicas están disponibles ($AVAILABLE_REPLICAS/$DESIRED_REPLICAS)"
+            kubectl get events -n ${NAMESPACE} --sort-by=.metadata.creationTimestamp | tail -10
+          fi
+
+  post-deploy:
+    name: Post Despliegue
+    needs: [validate, deploy]
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy.result == 'success'
+    steps:
+      - name: Registro de Despliegue
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          VERSION="${{ github.event.inputs.version }}"
+          DEPLOY_ID="deploy-${ENV}-${VERSION//[^a-zA-Z0-9]/-}-${{ needs.validate.outputs.short_sha }}"
+          
+          echo "Despliegue completado:"
+          echo "ID: ${DEPLOY_ID}"
+          echo "Entorno: ${ENV}"
+          echo "Versión: ${VERSION}"
+          echo "Imagen: ${{ needs.validate.outputs.image }}"
+          echo "Fecha: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "Usuario: ${{ github.actor }}"
+          
+          # En un entorno real, esta información se guardaría en una BD o sistema de registro
+
+      - name: Notificar Despliegue
+        uses: ./.github/actions/notification
+        with:
+          notification-type: "success"
+          title: "Despliegue Completado - ${{ env.COMPONENTE }}"
+          message: "Se ha desplegado *${{ github.event.inputs.version }}* en *${{ github.event.inputs.environment }}*"
+          details: '[
+            {"type": "mrkdwn", "text": "*Entorno:*\n${{ github.event.inputs.environment }}"},
+            {"type": "mrkdwn", "text": "*Versión:*\n${{ github.event.inputs.version }}"},
+            {"type": "mrkdwn", "text": "*Desplegado por:*\n${{ github.actor }}"},
+            {"type": "mrkdwn", "text": "*Fecha:*\n$(date -u +''%Y-%m-%d %H:%M:%S UTC'')"}
+          ]'
+          action-url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action-text: "Ver Despliegue"
+          channels: "slack"
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
+
+  error-notify:
+    name: Notificar Error
+    needs: [validate, deploy]
+    if: failure() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar Notificación de Error
+        uses: ./.github/actions/notification
+        with:
+          notification-type: "failure"
+          title: "Error en Despliegue - ${{ env.COMPONENTE }}"
+          message: "Ha ocurrido un error al desplegar *${{ github.event.inputs.version }}* en *${{ github.event.inputs.environment }}*"
+          details: '[
+            {"type": "mrkdwn", "text": "*Entorno:*\n${{ github.event.inputs.environment }}"},
+            {"type": "mrkdwn", "text": "*Versión:*\n${{ github.event.inputs.version }}"}
+          ]'
+          action-url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          action-text: "Ver Detalles"
+          channels: "slack"
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
