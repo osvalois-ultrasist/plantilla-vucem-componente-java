@@ -1,0 +1,272 @@
+name: Fail-Fast Security Gates
+
+env:
+  REGISTRY: ghcr.io
+  COMPONENTE: ${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+  JAVA_VERSION: '21'
+
+on:
+  pull_request:
+    branches: [main, desarrollo]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, desarrollo, 'feature/**', 'hotfix/**', 'release/**']
+
+# Prevenir ejecuciones paralelas
+concurrency:
+  group: vucem-security-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    SECURITY GATE 1: SECRETS                           ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  secrets-gate:
+    name: 🔐 Gate 1 - Secretos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escanear secretos con Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Escanear secretos con TruffleHog
+        uses: trufflesecurity/trufflehog-actions-scan@master
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified --fail
+
+      - name: Verificar archivos de configuración
+        run: |
+          echo "🔍 Verificando archivos de configuración..."
+          
+          # Buscar patrones críticos que nunca deben estar en el código
+          CRITICAL_PATTERNS=(
+            "password\s*=\s*['\"]?[^'\"\s]{8,}"
+            "secret\s*=\s*['\"]?[^'\"\s]{16,}"
+            "api[_-]?key\s*=\s*['\"]?[^'\"\s]{16,}"
+            "private[_-]?key\s*=\s*['\"]?-----BEGIN"
+            "token\s*=\s*['\"]?[^'\"\s]{20,}"
+          )
+          
+          FOUND_CRITICAL=false
+          for pattern in "${CRITICAL_PATTERNS[@]}"; do
+            if grep -rE "$pattern" --include="*.properties" --include="*.yml" --include="*.yaml" --include="*.xml" --include="*.json" .; then
+              echo "❌ CRÍTICO: Posible secreto encontrado con patrón: $pattern"
+              FOUND_CRITICAL=true
+            fi
+          done
+          
+          if [ "$FOUND_CRITICAL" = true ]; then
+            echo "❌ FALLO DEL GATE: Se encontraron posibles secretos críticos"
+            exit 1
+          fi
+          
+          echo "✅ Gate de secretos pasado"
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    SECURITY GATE 2: DEPENDENCIES                      ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  dependencies-gate:
+    name: 🔗 Gate 2 - Dependencias
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verificar dependencias conocidas vulnerables
+        run: |
+          echo "🔍 Verificando dependencias críticas..."
+          
+          # Lista de dependencias prohibidas o versiones críticas
+          BANNED_DEPS=(
+            "log4j-core.*2\.(0|1[0-6])\."
+            "spring-core.*5\.[0-2]\."
+            "jackson-databind.*2\.(9\.[0-9]|10\.[0-4])\."
+            "commons-collections.*3\."
+          )
+          
+          FOUND_BANNED=false
+          for dep in "${BANNED_DEPS[@]}"; do
+            if grep -E "$dep" pom.xml; then
+              echo "❌ CRÍTICO: Dependencia prohibida encontrada: $dep"
+              FOUND_BANNED=true
+            fi
+          done
+          
+          if [ "$FOUND_BANNED" = true ]; then
+            echo "❌ FALLO DEL GATE: Dependencias críticas encontradas"
+            exit 1
+          fi
+
+      - name: Escaneo rápido de vulnerabilidades
+        run: |
+          mvn -B dependency-check:check \
+            -DfailBuildOnCVSS=7.0 \
+            -Dformat=JSON \
+            -DretireJsAnalyzerEnabled=false \
+            -DnodeAnalyzerEnabled=false \
+            -DpyAnalyzerEnabled=false \
+            -DrubygemsAnalyzerEnabled=false \
+            -DphpComposerAnalyzerEnabled=false \
+            -DautoconfAnalyzerEnabled=false \
+            -DcmakeAnalyzerEnabled=false \
+            -DassemblyAnalyzerEnabled=false \
+            -DmixAuditAnalyzerEnabled=false
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    SECURITY GATE 3: CODE QUALITY                      ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  code-quality-gate:
+    name: 📊 Gate 3 - Calidad de Código
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Análisis rápido de seguridad con SpotBugs
+        run: |
+          mvn -B compile spotbugs:check \
+            -Dspotbugs.plugins=com.h3xstream.findsecbugs:findsecbugs-plugin:1.12.0 \
+            -Dspotbugs.failOnError=true \
+            -Dspotbugs.threshold=Medium
+
+      - name: Verificar SonarQube Quality Gate
+        if: vars.SONAR_HOST_URL != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          mvn -B sonar:sonar \
+            -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.COMPONENTE }} \
+            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    SECURITY GATE 4: LICENSE COMPLIANCE                ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  license-compliance-gate:
+    name: ⚖️ Gate 4 - Cumplimiento de Licencias
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verificar licencias prohibidas
+        run: |
+          echo "🔍 Verificando licencias de dependencias..."
+          
+          # Generar lista de dependencias
+          mvn -B dependency:list -DoutputFile=dependencies.txt -DincludeScope=compile
+          
+          # Licencias prohibidas para uso gubernamental
+          PROHIBITED_LICENSES=(
+            "GPL"
+            "AGPL"
+            "SSPL"
+            "Commons Clause"
+            "BUSL"
+          )
+          
+          # Verificar si existen dependencias con licencias problemáticas
+          # Nota: Esto es una verificación básica, en producción se recomienda usar herramientas como FOSSA o WhiteSource
+          if grep -i -E "(gpl|agpl|sspl)" dependencies.txt; then
+            echo "⚠️  ADVERTENCIA: Posibles dependencias con licencias copyleft encontradas"
+            echo "📋 Revisar manualmente las licencias antes de continuar"
+          else
+            echo "✅ No se encontraron licencias prohibidas obvias"
+          fi
+
+      - name: Generar SBOM para auditoría
+        run: |
+          mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom \
+            -DoutputFormat=json \
+            -DincludeLicenseText=true
+
+  # ╔════════════════════════════════════════════════════════════════════════╗
+  # ║                    SECURITY GATE SUMMARY                              ║
+  # ╚════════════════════════════════════════════════════════════════════════╝
+  security-gate-summary:
+    name: 📋 Resumen de Security Gates
+    needs: [secrets-gate, dependencies-gate, code-quality-gate, license-compliance-gate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluar resultados de los gates
+        run: |
+          echo "# 🛡️ Resumen de Security Gates - ${{ env.COMPONENTE }}"
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "## Commit: ${{ github.sha }}"
+          echo ""
+          echo "### Resultados:"
+          echo "- 🔐 Gate 1 (Secretos): ${{ needs.secrets-gate.result == 'success' && '✅ PASADO' || '❌ FALLIDO' }}"
+          echo "- 🔗 Gate 2 (Dependencias): ${{ needs.dependencies-gate.result == 'success' && '✅ PASADO' || '❌ FALLIDO' }}"
+          echo "- 📊 Gate 3 (Calidad): ${{ needs.code-quality-gate.result == 'success' && '✅ PASADO' || '❌ FALLIDO' }}"
+          echo "- ⚖️ Gate 4 (Licencias): ${{ needs.license-compliance-gate.result == 'success' && '✅ PASADO' || '❌ FALLIDO' }}"
+          echo ""
+          
+          # Determinar si todos los gates críticos pasaron
+          CRITICAL_GATES_PASSED=true
+          if [[ "${{ needs.secrets-gate.result }}" != "success" || "${{ needs.dependencies-gate.result }}" != "success" ]]; then
+            CRITICAL_GATES_PASSED=false
+          fi
+          
+          if [ "$CRITICAL_GATES_PASSED" = true ]; then
+            echo "🎉 **RESULTADO: TODOS LOS GATES CRÍTICOS PASARON**"
+            echo "✅ El código puede continuar al siguiente stage del pipeline"
+          else
+            echo "🚨 **RESULTADO: GATES CRÍTICOS FALLIDOS**"
+            echo "❌ El código NO puede continuar hasta resolver los problemas"
+            exit 1
+          fi
+
+      - name: Notificar a equipos de seguridad
+        if: failure()
+        run: |
+          echo "🚨 Notificando fallo de security gates a equipos de seguridad..."
+          # Aquí se podría integrar con sistemas de notificación como Slack, Teams, etc.
+          echo "Commit ${{ github.sha }} falló en security gates"
+          echo "Repositorio: ${{ github.repository }}"
+          echo "Actor: ${{ github.actor }}"

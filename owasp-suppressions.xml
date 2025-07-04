@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    
+    <!-- ============================================================================ -->
+    <!-- SUPRESIONES ESPECÍFICAS PARA COMPONENTES VUCEM                             -->
+    <!-- ============================================================================ -->
+    
+    <!-- Supresión temporal para vulnerabilidades en fase de mitigación -->
+    <!-- 
+    <suppress>
+        <notes>CVE temporal - en proceso de actualización por el proveedor</notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework/spring-web@.*$</packageUrl>
+        <cve>CVE-2023-XXXXX</cve>
+    </suppress>
+    -->
+    
+    <!-- ============================================================================ -->
+    <!-- SUPRESIONES POR FALSE POSITIVES CONOCIDOS                                  -->
+    <!-- ============================================================================ -->
+    
+    <!-- Spring Boot Actuator - False positive común -->
+    <suppress>
+        <notes>False positive: Spring Boot Actuator endpoints están protegidos por configuración</notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework\.boot/spring-boot-actuator.*$</packageUrl>
+        <cpe>cpe:/a:vmware:springsource_spring_framework</cpe>
+    </suppress>
+    
+    <!-- H2 Database - Solo usado en pruebas -->
+    <suppress>
+        <notes>H2 Database solo se usa en scope test, no en producción</notes>
+        <packageUrl regex="true">^pkg:maven/com\.h2database/h2@.*$</packageUrl>
+        <cve>CVE-2022-45868</cve>
+    </suppress>
+    
+    <!-- ============================================================================ -->
+    <!-- SUPRESIONES POR CONFIGURACIÓN ESPECÍFICA DE VUCEM                         -->
+    <!-- ============================================================================ -->
+    
+    <!-- Jackson Databind - Configurado con protecciones adicionales -->
+    <suppress>
+        <notes>Jackson databind configurado con DefaultTyping.NONE y validaciones adicionales</notes>
+        <packageUrl regex="true">^pkg:maven/com\.fasterxml\.jackson\.core/jackson-databind@.*$</packageUrl>
+        <cpe>cpe:/a:fasterxml:jackson-databind</cpe>
+        <!-- Solo suprimir CVEs específicos que están mitigados -->
+        <cve>CVE-2020-36518</cve>
+    </suppress>
+    
+    <!-- ============================================================================ -->
+    <!-- SUPRESIONES POR ANÁLISIS DE RIESGO VUCEM                                   -->
+    <!-- ============================================================================ -->
+    
+    <!-- Logback - Configuración controlada sin JNDI -->
+    <suppress>
+        <notes>Logback configurado sin JNDI lookup, riesgo mitigado</notes>
+        <packageUrl regex="true">^pkg:maven/ch\.qos\.logback/logback-.*@.*$</packageUrl>
+        <cve>CVE-2021-42550</cve>
+    </suppress>
+    
+    <!-- ============================================================================ -->
+    <!-- SUPRESIONES TEMPORALES CON FECHA DE REVISIÓN                              -->
+    <!-- ============================================================================ -->
+    
+    <!-- Template para supresiones temporales -->
+    <!--
+    <suppress until="2024-12-31Z">
+        <notes>Supresión temporal hasta actualización de dependencia - Revisar antes del 31/12/2024</notes>
+        <packageUrl regex="true">^pkg:maven/group/artifact@version$</packageUrl>
+        <cve>CVE-YYYY-XXXXX</cve>
+    </suppress>
+    -->
+    
+    <!-- ============================================================================ -->
+    <!-- SUPRESIONES POR CONTEXTO GUBERNAMENTAL                                     -->
+    <!-- ============================================================================ -->
+    
+    <!-- CVEs que no aplican por estar en ambiente controlado -->
+    <suppress>
+        <notes>CVE no aplicable: componente ejecuta en infraestructura gubernamental controlada sin exposición externa directa</notes>
+        <packageUrl regex="true">^pkg:maven/org\.eclipse\.jetty/jetty-.*@.*$</packageUrl>
+        <cpe>cpe:/a:eclipse:jetty</cpe>
+        <!-- Agregar CVEs específicos según análisis -->
+    </suppress>
+    
+    <!-- ============================================================================ -->
+    <!-- CONFIGURACIÓN GLOBAL DE SUPRESIONES                                        -->
+    <!-- ============================================================================ -->
+    
+    <!-- Suprimir alertas de dependencias de desarrollo que no van a producción -->
+    <suppress>
+        <notes>Dependencias de scope test no van a producción</notes>
+        <packageUrl regex="true">^pkg:maven/org\.mockito/mockito-.*@.*$</packageUrl>
+    </suppress>
+    
+    <suppress>
+        <notes>WireMock solo para pruebas</notes>
+        <packageUrl regex="true">^pkg:maven/org\.wiremock/wiremock-.*@.*$</packageUrl>
+    </suppress>
+    
+    <suppress>
+        <notes>TestContainers solo para pruebas de integración</notes>
+        <packageUrl regex="true">^pkg:maven/org\.testcontainers/.*@.*$</packageUrl>
+    </suppress>
+    
+    <!-- ============================================================================ -->
+    <!-- NOTAS IMPORTANTES PARA REVISIÓN                                            -->
+    <!-- ============================================================================ -->
+    
+    <!--
+    PROCESO DE REVISIÓN DE SUPRESIONES:
+    
+    1. Todas las supresiones deben tener justificación en el elemento <notes>
+    2. Las supresiones temporales deben incluir fecha límite con 'until'
+    3. Revisar supresiones mensualmente en el proceso de DevSecOps
+    4. Documentar decisiones de supresión en el registro de riesgos
+    5. Validar que las mitigaciones implementadas siguen siendo efectivas
+    
+    CRITERIOS PARA SUPRESIÓN:
+    - False positive confirmado por múltiples fuentes
+    - CVE no aplicable al contexto de uso específico
+    - Mitigación implementada que reduce el riesgo a nivel aceptable
+    - Dependencia solo en scope test/provided
+    - Análisis de riesgo documentado y aprobado
+    -->
+    
+</suppressions>

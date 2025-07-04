@@ -211,12 +211,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Inicializar CodeQL
-        uses: github/codeql-action/init@v2
-        with:
-          languages: java
-          queries: security-extended,security-and-quality
-
       - name: Configurar JDK
         uses: actions/setup-java@v3
         with:
@@ -224,13 +218,21 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Compilar para análisis CodeQL
+      - name: Compilar para análisis
         run: mvn -B compile
 
-      - name: Analizar con CodeQL
-        uses: github/codeql-action/analyze@v2
-        with:
-          category: "/language:java"
+      - name: Ejecutar análisis SonarQube
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          mvn -B sonar:sonar \
+            -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.COMPONENTE }} \
+            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
 
       - name: Analizar con SpotBugs Security Rules
         run: |
@@ -271,11 +273,12 @@ jobs:
           timeout: '15m'
 
       - name: Publicar resultados de Trivy
-        uses: github/codeql-action/upload-sarif@v2
+        uses: actions/upload-artifact@v3
         if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
-          category: container-security
+          name: trivy-security-report
+          path: 'trivy-results.sarif'
+          retention-days: 30
 
       - name: Verificar buenas prácticas de contenedor con Dockle
         run: |

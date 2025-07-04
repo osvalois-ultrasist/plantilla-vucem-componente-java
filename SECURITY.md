@@ -29,41 +29,52 @@ Esta plantilla de componente VUCEM implementa los siguientes controles de seguri
 ### Autenticación y Autorización
 
 - Autenticación basada en JWT (JSON Web Tokens)
-- Verificación de firma de tokens
-- Control de acceso basado en roles
-- Validación de permisos por endpoint
-- Gestión segura de sesiones
+- Verificación de firma de tokens con algoritmos seguros (RS256/ES256)
+- Control de acceso basado en roles (RBAC) con políticas OPA
+- Validación de permisos por endpoint con Gatekeeper
+- Gestión segura de sesiones con rotación automática
 
 ### Seguridad de Datos
 
-- Cifrado de datos sensibles en reposo
-- Cifrado TLS para todas las comunicaciones (HTTPS)
-- Sanitización de entradas de usuario
-- Prevención de exposición de datos sensibles en respuestas y logs
-- Implementación de política de retención de datos
+- Cifrado de datos sensibles en reposo (AES-256)
+- Cifrado TLS 1.3 para todas las comunicaciones
+- Sanitización de entradas con Bean Validation
+- Prevención de exposición de datos sensibles en logs
+- Gestión de secretos con External Secrets Operator + Vault OSS
+- Implementación de política de retención de datos conforme a LFPDPPP
 
 ### Protección contra Amenazas Comunes
 
-- Protección contra ataques CSRF
-- Cabeceras de seguridad HTTP configuradas
-- Limitación de tasa para prevenir ataques de fuerza bruta
-- Validación estricta de entradas para prevenir inyecciones
-- Manejo seguro de dependencias y bibliotecas
+- Protección contra ataques CSRF con tokens SameSite
+- Headers de seguridad HTTP (HSTS, CSP, X-Frame-Options)
+- Rate limiting con Resilience4j
+- Validación estricta contra inyecciones SQL/NoSQL/LDAP
+- WAF policies con ModSecurity rules
 
 ### Registro y Monitoreo
 
-- Registro detallado de eventos de seguridad
-- Monitoreo de actividades sospechosas
-- Alertas configuradas para patrones de ataque conocidos
-- Trazabilidad de acciones administrativas
+- Logging estructurado con correlación de trazas (OpenTelemetry)
+- SIEM integration para análisis de comportamiento
+- Alertas automáticas para patrones de ataque (Prometheus + AlertManager)
+- Audit trail completo con firma digital
 
-### Seguridad en el Ciclo de Desarrollo
+### Seguridad en el Ciclo de Desarrollo (DevSecOps)
 
-- Análisis estático de código (SAST)
-- Análisis de composición de software (SCA)
-- Pruebas de seguridad automatizadas
-- Revisión de código por pares
-- Gestión segura de secretos en CI/CD
+- Análisis estático con SonarQube autohospedado
+- Escaneo de dependencias con OWASP Dependency Check
+- Policy as Code con Open Policy Agent (OPA)
+- Fail-fast security gates en CI/CD
+- Container security scanning con Trivy
+- Supply chain security con SBOM generation (CycloneDX)
+- Secret scanning con Gitleaks + TruffleHog
+
+### Cumplimiento y Governance
+
+- Policies automatizadas con Gatekeeper
+- Image signing con Cosign
+- Vulnerability management con automated patching
+- License compliance scanning
+- Infrastructure as Code security with Checkov
 
 ## Requisitos para Contribuciones
 

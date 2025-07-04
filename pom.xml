@@ -27,10 +27,10 @@
         <jacoco.version>0.8.11</jacoco.version>
         <jwt.version>0.11.5</jwt.version>
 
-        <!-- SonarCloud Configuration -->
-        <sonar.organization>osvalois-ultrasist</sonar.organization>
-        <sonar.host.url>https://sonarcloud.io</sonar.host.url>
-        <sonar.projectKey>osvalois-ultrasist_template-vucem-componente</sonar.projectKey>
+        <!-- SonarQube Self-Hosted Configuration -->
+        <sonar.host.url>https://sonarqube.vucem.gob.mx</sonar.host.url>
+        <sonar.projectKey>vucem_${project.artifactId}</sonar.projectKey>
+        <sonar.projectName>VUCEM - ${project.name}</sonar.projectName>
         <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
         <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
         <sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
@@ -461,10 +461,50 @@
                 <groupId>org.owasp</groupId>
                 <artifactId>dependency-check-maven</artifactId>
                 <version>8.4.0</version>
+                <configuration>
+                    <failBuildOnCVSS>7.0</failBuildOnCVSS>
+                    <suppressionFile>owasp-suppressions.xml</suppressionFile>
+                    <formats>
+                        <format>ALL</format>
+                    </formats>
+                    <assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
+                    <nodeAnalyzerEnabled>false</nodeAnalyzerEnabled>
+                    <pyAnalyzerEnabled>false</pyAnalyzerEnabled>
+                    <rubygemsAnalyzerEnabled>false</rubygemsAnalyzerEnabled>
+                    <phpComposerAnalyzerEnabled>false</phpComposerAnalyzerEnabled>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
                             <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- CycloneDX SBOM Generation -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>2.7.9</version>
+                <configuration>
+                    <projectType>application</projectType>
+                    <schemaVersion>1.5</schemaVersion>
+                    <includeBomSerialNumber>true</includeBomSerialNumber>
+                    <includeCompileScope>true</includeCompileScope>
+                    <includeProvidedScope>false</includeProvidedScope>
+                    <includeRuntimeScope>true</includeRuntimeScope>
+                    <includeSystemScope>false</includeSystemScope>
+                    <includeTestScope>false</includeTestScope>
+                    <includeLicenseText>true</includeLicenseText>
+                    <outputName>vucem-sbom</outputName>
+                    <outputFormat>all</outputFormat>
+                </configuration>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>makeAggregateBom</goal>
                         </goals>
                     </execution>
                 </executions>
