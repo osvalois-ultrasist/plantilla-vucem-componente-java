@@ -1,0 +1,150 @@
+#.github/workflows/actions/security-scan/action.yml
+name: 'Security Scan'
+description: 'Ejecuta escaneos de seguridad para aplicaciones VUCEM'
+
+inputs:
+  scan-type:
+    description: 'Tipo de escaneo a realizar (dependencies, code, container, all)'
+    required: false
+    default: 'all'
+  fail-on-severity:
+    description: 'Nivel de severidad para fallar (critical, high, medium, low)'
+    required: false
+    default: 'high'
+  publish-results:
+    description: 'Publicar resultados de escaneo'
+    required: false
+    default: 'true'
+  image-name:
+    description: 'Nombre de la imagen Docker para escaneo de contenedor'
+    required: false
+    default: ''
+  image-tag:
+    description: 'Tag de la imagen Docker para escaneo de contenedor'
+    required: false
+    default: 'latest'
+
+runs:
+  using: "composite"
+  steps:
+    # Escaneo de dependencias
+    - name: Escanear dependencias
+      if: inputs.scan-type == 'dependencies' || inputs.scan-type == 'all'
+      shell: bash
+      run: |
+        echo "Iniciando escaneo de dependencias..."
+        mkdir -p scan-results/dependencies
+        
+        # OWASP Dependency Check
+        mvn -B dependency-check:check \
+          -DfailBuildOnCVSS=7 \
+          -Dformat=ALL \
+          -DoutputDirectory=scan-results/dependencies
+        
+        # Generar SBOM CycloneDX
+        mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom -DoutputFormat=all
+        
+        echo "Escaneo de dependencias completado"
+        
+        # Mover resultados
+        mv target/dependency-check-report.* scan-results/dependencies/ || true
+        mv target/bom.* scan-results/dependencies/ || true
+
+    # Escaneo de código
+    - name: Análisis estático de seguridad de código
+      if: inputs.scan-type == 'code' || inputs.scan-type == 'all'
+      shell: bash
+      run: |
+        echo "Iniciando análisis estático de seguridad..."
+        mkdir -p scan-results/code
+        
+        # FindSecBugs
+        mvn -B spotbugs:check -Dspotbugs.plugins=com.h3xstream.findsecbugs:findsecbugs-plugin:1.12.0 || true
+        
+        # SonarQube (si está configurado)
+        if [ -n "$SONAR_TOKEN" ]; then
+          mvn -B sonar:sonar -Dsonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}
+        fi
+        
+        echo "Análisis estático de seguridad completado"
+
+    # Escaneo de secretos
+    - name: Escanear secretos
+      if: inputs.scan-type == 'code' || inputs.scan-type == 'all'
+      shell: bash
+      run: |
+        echo "Iniciando escaneo de secretos..."
+        mkdir -p scan-results/secrets
+        
+        # Buscar patrones sospechosos en archivos de configuración
+        grep -r -E "(password|secret|key|token|credential).*[=:]" \
+          --include="*.properties" --include="*.yml" --include="*.yaml" \
+          --include="*.xml" --include="*.json" . > scan-results/secrets/potential-secrets.txt || true
+        
+        echo "Escaneo de secretos completado"
+
+    # Escaneo de contenedor (si se proporciona nombre de imagen)
+    - name: Escanear contenedor
+      if: (inputs.scan-type == 'container' || inputs.scan-type == 'all') && inputs.image-name != ''
+      shell: bash
+      run: |
+        echo "Iniciando escaneo de contenedor..."
+        mkdir -p scan-results/container
+        
+        # Instalar Trivy
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.43.1
+        
+        # Escanear imagen
+        IMAGE="${{ inputs.image-name }}:${{ inputs.image-tag }}"
+        echo "Escaneando imagen: $IMAGE"
+        
+        trivy image --security-checks vuln \
+          --severity ${{ inputs.fail-on-severity == 'critical' && 'CRITICAL' || inputs.fail-on-severity == 'high' && 'CRITICAL,HIGH' || inputs.fail-on-severity == 'medium' && 'CRITICAL,HIGH,MEDIUM' || 'CRITICAL,HIGH,MEDIUM,LOW' }} \
+          --output scan-results/container/trivy-report.json \
+          --format json \
+          $IMAGE || true
+        
+        trivy image --security-checks vuln \
+          --severity ${{ inputs.fail-on-severity == 'critical' && 'CRITICAL' || inputs.fail-on-severity == 'high' && 'CRITICAL,HIGH' || inputs.fail-on-severity == 'medium' && 'CRITICAL,HIGH,MEDIUM' || 'CRITICAL,HIGH,MEDIUM,LOW' }} \
+          --output scan-results/container/trivy-report.txt \
+          $IMAGE || true
+        
+        echo "Escaneo de contenedor completado"
+
+    # Publicar resultados
+    - name: Publicar resultados de escaneo
+      if: inputs.publish-results == 'true'
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-scan-results
+        path: scan-results
+        retention-days: 30
+
+    # Generar resumen
+    - name: Generar resumen de escaneo
+      shell: bash
+      run: |
+        echo "# Resumen de Escaneo de Seguridad" > scan-results/summary.md
+        echo "Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> scan-results/summary.md
+        echo "" >> scan-results/summary.md
+        echo "## Escaneos realizados:" >> scan-results/summary.md
+        
+        if [ "${{ inputs.scan-type }}" == "dependencies" ] || [ "${{ inputs.scan-type }}" == "all" ]; then
+          echo "- ✅ Dependencias" >> scan-results/summary.md
+        fi
+        
+        if [ "${{ inputs.scan-type }}" == "code" ] || [ "${{ inputs.scan-type }}" == "all" ]; then
+          echo "- ✅ Código" >> scan-results/summary.md
+          echo "- ✅ Secretos" >> scan-results/summary.md
+        fi
+        
+        if [ "${{ inputs.scan-type }}" == "container" ] || [ "${{ inputs.scan-type }}" == "all" ]; then
+          if [ -n "${{ inputs.image-name }}" ]; then
+            echo "- ✅ Contenedor (${{ inputs.image-name }}:${{ inputs.image-tag }})" >> scan-results/summary.md
+          else
+            echo "- ❌ Contenedor (no se especificó imagen)" >> scan-results/summary.md
+          fi
+        fi
+        
+        echo "" >> scan-results/summary.md
+        echo "## Nivel de severidad para fallar: ${{ inputs.fail-on-severity }}" >> scan-results/summary.md

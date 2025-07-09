@@ -1,0 +1,60 @@
+name: Solicitud de Funcionalidad
+description: Sugerir una idea o mejora para este proyecto
+title: "[FEATURE]: "
+labels: ["enhancement"]
+assignees:
+  - equipo-producto
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por sus sugerencias para mejorar nuestro componente VUCEM.
+
+  - type: textarea
+    id: problema
+    attributes:
+      label: ¿Su solicitud de funcionalidad está relacionada con un problema?
+      description: Describa claramente el problema u obstáculo que ha encontrado.
+      placeholder: Me frustro cuando [...]
+    validations:
+      required: false
+
+  - type: textarea
+    id: solucion
+    attributes:
+      label: Solución propuesta
+      description: Describa la solución que le gustaría ver implementada.
+      placeholder: Me gustaría que el sistema pudiera [...]
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas consideradas
+      description: Describa cualquier solución o característica alternativa que haya considerado.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: prioridad
+    attributes:
+      label: Prioridad sugerida
+      description: Indique la prioridad que considera debe tener esta solicitud
+      options:
+        - Crítica (necesaria para próxima versión)
+        - Alta (deseable para próxima versión)
+        - Media (planificar en próximos 3 meses)
+        - Baja (considerar para futuro)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terminos
+    attributes:
+      label: Código de conducta
+      description: Al enviar esta solicitud, confirma que ha respetado el código de conducta del proyecto
+      options:
+        - label: He leído y acepto el [Código de Conducta](../CODE_OF_CONDUCT.md) del proyecto
+          required: true

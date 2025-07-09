@@ -1,0 +1,101 @@
+spring:
+  application:
+    name: ${COMPONENTE_NOMBRE:vucem-componente}
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  main:
+    allow-bean-definition-overriding: true
+  jackson:
+    date-format: com.fasterxml.jackson.databind.util.ISO8601DateFormat
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+  datasource:
+    hikari:
+      connection-timeout: 20000
+      maximum-pool-size: 10
+      minimum-idle: 5
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  cache:
+    cache-names: config,catalogos
+    caffeine:
+      spec: maximumSize=500,expireAfterAccess=600s
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connectTimeout: 5000
+            readTimeout: 5000
+            loggerLevel: full
+
+server:
+  port: ${JWT_EXPIRACION:8090}
+  tomcat:
+    max-threads: 200
+    accept-count: 100
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/plain
+    min-response-size: 2048
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,diskSpace
+        readiness:
+          include: readinessState,db
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  tracing:
+    sampling:
+      probability: 1.0
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [%X{traceId},%X{spanId}] - %msg%n"
+  level:
+    root: INFO
+    mx.gob.vucem: INFO
+    org.springframework.web: INFO
+    org.hibernate: WARN
+
+vucem:
+  componente:
+    nombre: ${spring.application.name}
+    version: @project.version@
+  seguridad:
+    permitir-origins: ${PERMITIR_ORIGINS:*}
+    jwt:
+      issuer: ${JWT_ISSUER:vucem.gob.mx}
+      expiracion: ${JWT_EXPIRACION:3600}
+  metricas:
+    enabled: true
+  auditoria:
+    enabled: true
+  circuit-breaker:
+    enabled: true
+    timeout: 5s
+    retry-attempts: 3

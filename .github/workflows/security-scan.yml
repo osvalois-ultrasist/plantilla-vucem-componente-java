@@ -1,0 +1,481 @@
+#.github/workflows/security-scan.yml
+name: Security Scan
+
+env:
+  REGISTRY: ghcr.io
+  COMPONENTE: ${{ vars.COMPONENTE_NOMBRE || 'vucem-componente' }}
+  JAVA_VERSION: '21'
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Todos los lunes a las 2 AM
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        description: 'Tag de imagen a escanear (si se deja vacío, se compila una nueva)'
+        required: false
+        type: string
+      debug:
+        type: boolean
+        description: 'Ejecutar en modo depuración'
+        required: false
+        default: false
+        
+# Prevenir ejecuciones paralelas para evitar interferencias
+concurrency:
+  group: vucem-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  initialize:
+    name: Inicialización
+    runs-on: ubuntu-latest
+    outputs:
+      image-name: ${{ steps.set-image.outputs.image-name }}
+      image-tag: ${{ steps.set-image.outputs.image-tag }}
+      should-build: ${{ steps.set-image.outputs.should-build }}
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determinar imagen a escanear
+        id: set-image
+        run: |
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.COMPONENTE }}"
+          echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+
+          INPUT_TAG="${{ github.event.inputs.image-tag }}"
+          if [[ -n "$INPUT_TAG" ]]; then
+            echo "image-tag=${INPUT_TAG}" >> $GITHUB_OUTPUT
+            echo "should-build=false" >> $GITHUB_OUTPUT
+            echo "Se utilizará la imagen existente: ${IMAGE_NAME}:${INPUT_TAG}"
+          else
+            TAG="scan-$(date +'%Y%m%d%H%M')-$(git rev-parse --short HEAD)"
+            echo "image-tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "should-build=true" >> $GITHUB_OUTPUT
+            echo "Se construirá una nueva imagen: ${IMAGE_NAME}:${TAG}"
+          fi
+
+  build-image:
+    name: Construir Imagen
+    needs: initialize
+    if: needs.initialize.outputs.should-build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Compilar con Maven
+        run: |
+          mvn -B package \
+            -DskipTests=true \
+            -Dmaven.javadoc.skip=true
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Autenticar en Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir imagen Docker para escáneo
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+          build-args: |
+            VERSION=scan-$(date +'%Y%m%d%H%M')
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+
+  secrets-scanning:
+    name: Escaneo de Secretos
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escanear secretos con Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Escanear secretos con TruffleHog
+        uses: trufflesecurity/trufflehog-actions-scan@master
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+
+      - name: Escanear secretos en archivos de configuración
+        run: |
+          mkdir -p scan-results/secrets
+          echo "Escaneando archivos de configuración por secretos..."
+          
+          # Buscar patrones sospechosos en archivos de configuración
+          RESULT=0
+          grep -r -E "(password|secret|key|token|credential).*[=:]" \
+            --include="*.properties" --include="*.yml" --include="*.yaml" \
+            --include="*.xml" --include="*.json" . > scan-results/secrets/potential-secrets.txt || RESULT=$?
+          
+          # Verificar el resultado pero no fallar el pipeline
+          if [ $RESULT -eq 0 ]; then
+            echo "ADVERTENCIA: Se encontraron posibles secretos en archivos de configuración"
+            cat scan-results/secrets/potential-secrets.txt
+          elif [ $RESULT -eq 1 ]; then
+            echo "No se encontraron coincidencias de secretos en archivos de configuración"
+          else
+            echo "Error al ejecutar la búsqueda de secretos: $RESULT"
+            exit 1
+          fi
+          
+          echo "Verificando valores por defecto de credenciales..."
+
+  dependency-scan:
+    name: Escaneo de Dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Escanear dependencias con OWASP Dependency Check
+        run: mvn -B dependency-check:check
+        env:
+          MAVEN_OPTS: "-Xmx2g"
+
+      - name: Generar reporte SBOM CycloneDX
+        run: mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+
+      - name: Publicar SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom-cyclonedx
+          path: target/bom.json
+          retention-days: 30
+
+      - name: Analizar con Dependency-Track
+        if: vars.DEPENDENCY_TRACK_URL != ''
+        run: |
+          # Enviar SBOM a Dependency-Track
+          curl -X "POST" "${{ vars.DEPENDENCY_TRACK_URL }}/api/v1/bom" \
+            -H "X-API-Key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "project=${{ github.repository_owner }}_${{ env.COMPONENTE }}" \
+            -F "bom=@target/bom.json"
+
+  code-scanning:
+    name: Análisis Estático de Seguridad (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: java
+          queries: security-extended,security-and-quality
+
+      - name: Configurar JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Compilar para análisis CodeQL
+        run: mvn -B compile
+
+      - name: Analizar con CodeQL
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:java"
+
+      - name: Analizar con SpotBugs Security Rules
+        run: |
+          mvn -B spotbugs:check -Dspotbugs.plugins=com.h3xstream.findsecbugs:findsecbugs-plugin:1.12.0
+
+  container-scanning:
+    name: Escaneo de Contenedores
+    needs: [initialize, build-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Autenticar en Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Ejecutar escaneo de contenedor
+        uses: ./.github/actions/security-scan
+        with:
+          scan-type: 'container'
+          fail-on-severity: 'high'
+          image-name: ${{ needs.initialize.outputs.image-name }}
+          image-tag: ${{ needs.initialize.outputs.image-tag }}
+          
+      - name: Escanear con Trivy (vulnerabilidades)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          timeout: '15m'
+
+      - name: Publicar resultados de Trivy
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: container-security
+
+      - name: Verificar buenas prácticas de contenedor con Dockle
+        run: |
+          # Instalar Dockle
+          VERSION=$(curl --silent "https://api.github.com/repos/goodwithtech/dockle/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+          wget -q https://github.com/goodwithtech/dockle/releases/download/v${VERSION}/dockle_${VERSION}_Linux-64bit.deb
+          sudo dpkg -i dockle_${VERSION}_Linux-64bit.deb
+          
+          # Ejecutar Dockle
+          dockle --exit-code 1 --exit-level warn ${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }} || true
+
+  sign-image:
+    name: Firmar Imagen
+    needs: [initialize, build-image, container-scanning]
+    if: needs.initialize.outputs.should-build == 'true' && needs.container-scanning.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+      contents: read
+    steps:
+      - name: Instalar Cosign
+        uses: sigstore/cosign-installer@main
+
+      - name: Autenticar en Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Firmar imagen con Cosign
+        run: |
+          IMAGE_TO_SIGN="${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }}"
+          cosign sign --yes ${IMAGE_TO_SIGN}
+          echo "Imagen firmada: ${IMAGE_TO_SIGN}"
+
+      - name: Verificar firma
+        run: |
+          IMAGE="${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }}"
+          cosign verify ${IMAGE} --output text
+
+  dast-scanning:
+    name: Análisis Dinámico (DAST)
+    needs: [initialize, build-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Iniciar la aplicación para pruebas
+        run: |
+          # Extraer la imagen y ejecutarla en un contenedor temporal
+          echo "Iniciando aplicación para pruebas DAST..."
+          docker pull ${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }}
+          docker run -d --name test-app -p 8080:8080 ${{ needs.initialize.outputs.image-name }}:${{ needs.initialize.outputs.image-tag }}
+          
+          # Esperar a que la aplicación esté lista
+          echo "Esperando a que la aplicación esté lista..."
+          WAIT_SECONDS=30
+          MAX_RETRY=5
+          RETRY=0
+          
+          while [ $RETRY -lt $MAX_RETRY ]; do
+            echo "Intento $((RETRY+1))/$MAX_RETRY - Esperando $WAIT_SECONDS segundos..."
+            sleep $WAIT_SECONDS
+            
+            # Verificar si la aplicación está respondiendo
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health || echo "000")
+            
+            if [ "$HTTP_CODE" == "200" ]; then
+              echo "Aplicación lista y respondiendo correctamente (HTTP 200)"
+              break
+            else
+              echo "La aplicación no está lista (HTTP $HTTP_CODE)"
+              RETRY=$((RETRY+1))
+              
+              if [ $RETRY -eq $MAX_RETRY ]; then
+                echo "ERROR: La aplicación no respondió después de $MAX_RETRY intentos"
+                docker logs test-app
+                docker stop test-app
+                docker rm test-app
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Escanear API con ZAP
+        uses: zaproxy/action-api-scan@v0.4.0
+        with:
+          target: 'http://localhost:8080'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          fail_action: true
+
+      - name: Detener contenedor de prueba
+        if: always()
+        run: |
+          docker stop test-app
+          docker rm test-app
+
+  security-summary:
+    name: Resumen de Seguridad
+    needs: [secrets-scanning, dependency-scan, code-scanning, container-scanning, sign-image, dast-scanning]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generar resumen de seguridad
+        run: |
+          mkdir -p security-summary
+          
+          echo "# Resumen de Seguridad" > security-summary/security-report.md
+          echo "## Fecha: $(date +'%Y-%m-%d %H:%M:%S')" >> security-summary/security-report.md
+          echo "## Componente: ${{ env.COMPONENTE }}" >> security-summary/security-report.md
+          echo "## Resultados:" >> security-summary/security-report.md
+          
+          # Añadir estado de cada etapa
+          echo "- Escaneo de Secretos: ${{ needs.secrets-scanning.result == 'success' && '✅' || '❌' }}" >> security-summary/security-report.md
+          echo "- Análisis de Dependencias: ${{ needs.dependency-scan.result == 'success' && '✅' || '❌' }}" >> security-summary/security-report.md
+          echo "- Análisis Estático (SAST): ${{ needs.code-scanning.result == 'success' && '✅' || '❌' }}" >> security-summary/security-report.md
+          echo "- Escaneo de Contenedores: ${{ needs.container-scanning.result == 'success' && '✅' || '❌' }}" >> security-summary/security-report.md
+          echo "- Firma de Imagen: ${{ needs.sign-image.result == 'success' && '✅' || needs.sign-image.result == 'skipped' && '⏭️' || '❌' }}" >> security-summary/security-report.md
+          echo "- Análisis Dinámico (DAST): ${{ needs.dast-scanning.result == 'success' && '✅' || '❌' }}" >> security-summary/security-report.md
+          
+          echo "## Siguientes pasos:" >> security-summary/security-report.md
+          echo "- Revisar detalles de hallazgos en los artefactos generados" >> security-summary/security-report.md
+          echo "- Verificar código para resolución de vulnerabilidades" >> security-summary/security-report.md
+          echo "- Actualizar dependencias vulnerables" >> security-summary/security-report.md
+
+      - name: Publicar resumen de seguridad
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-summary
+          path: security-summary
+          retention-days: 30
+
+      - name: Notificar resultados
+        if: vars.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "📊 Reporte de Seguridad - ${{ env.COMPONENTE }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Resultado del análisis de seguridad para *${{ env.COMPONENTE }}*"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Secretos:* ${{ needs.secrets-scanning.result == 'success' && '✅' || '❌' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Dependencias:* ${{ needs.dependency-scan.result == 'success' && '✅' || '❌' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*SAST:* ${{ needs.code-scanning.result == 'success' && '✅' || '❌' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Contenedores:* ${{ needs.container-scanning.result == 'success' && '✅' || '❌' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*DAST:* ${{ needs.dast-scanning.result == 'success' && '✅' || '❌' }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Ver Detalles"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
