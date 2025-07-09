@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarqube
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+    mx.gob.vucem/service: sonarqube
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: sonarqube
+  template:
+    metadata:
+      labels:
+        app: sonarqube
+        component: quality-gate
+        mx.gob.vucem/service: sonarqube
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: sonarqube
+        image: sonarqube:10.3-community
+        ports:
+        - containerPort: 9000
+          name: http
+          protocol: TCP
+        env:
+        - name: SONAR_JDBC_URL
+          value: "jdbc:postgresql://postgres-service:5432/sonar"
+        - name: SONAR_JDBC_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: sonar-db-secret
+              key: username
+        - name: SONAR_JDBC_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: sonar-db-secret
+              key: password
+        - name: SONAR_WEB_CONTEXT
+          value: "/sonarqube"
+        - name: SONAR_WEB_PORT
+          value: "9000"
+        - name: SONAR_CE_JAVAOPTS
+          value: "-Xmx2g"
+        - name: SONAR_WEB_JAVAOPTS
+          value: "-Xmx1g"
+        volumeMounts:
+        - name: sonar-data
+          mountPath: /opt/sonarqube/data
+        - name: sonar-logs
+          mountPath: /opt/sonarqube/logs
+        - name: sonar-extensions
+          mountPath: /opt/sonarqube/extensions
+        - name: sonar-conf
+          mountPath: /opt/sonarqube/conf
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        livenessProbe:
+          httpGet:
+            path: /sonarqube/api/system/status
+            port: 9000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /sonarqube/api/system/status
+            port: 9000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /sonarqube/api/system/status
+            port: 9000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+      volumes:
+      - name: sonar-data
+        persistentVolumeClaim:
+          claimName: sonar-data-pvc
+      - name: sonar-logs
+        persistentVolumeClaim:
+          claimName: sonar-logs-pvc
+      - name: sonar-extensions
+        persistentVolumeClaim:
+          claimName: sonar-extensions-pvc
+      - name: sonar-conf
+        configMap:
+          name: sonar-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarqube-service
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9000
+    targetPort: 9000
+    protocol: TCP
+    name: http
+  selector:
+    app: sonarqube
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarqube-ingress
+  namespace: vucem-devtools
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - sonarqube.vucem.gob.mx
+    secretName: sonarqube-tls
+  rules:
+  - host: sonarqube.vucem.gob.mx
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sonarqube-service
+            port:
+              number: 9000

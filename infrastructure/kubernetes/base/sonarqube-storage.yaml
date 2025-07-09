@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonar-data-pvc
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+    type: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonar-logs-pvc
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+    type: logs
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonar-extensions-pvc
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+    type: extensions
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sonar-db-secret
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+type: Opaque
+data:
+  username: c29uYXI=  # sonar (base64)
+  password: cGFzc3dvcmQxMjM=  # password123 (base64) - CAMBIAR EN PRODUCCIÓN
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sonar-config
+  namespace: vucem-devtools
+  labels:
+    app: sonarqube
+    component: quality-gate
+data:
+  sonar.properties: |
+    # Configuración para entorno gubernamental mexicano
+    sonar.core.serverBaseURL=https://sonarqube.vucem.gob.mx
+    
+    # Configuración de seguridad
+    sonar.security.realm=LDAP
+    sonar.forceAuthentication=true
+    sonar.authenticator.downcase=true
+    
+    # Configuración de quality gates para VUCEM
+    sonar.qualitygate.ignoreSmallChanges=false
+    
+    # Configuración de análisis
+    sonar.exclusions=**/target/**,**/node_modules/**,**/*.min.js,**/*.min.css
+    sonar.test.exclusions=**/test/**,**/tests/**,**/*test*/**
+    
+    # Configuración de métricas específicas para proyectos gubernamentales
+    sonar.coverage.exclusions=**/config/**,**/dto/**,**/entity/**,**/exception/**
+    
+    # Configuración de retención de datos
+    sonar.dbcleaner.daysBeforeDeletingClosedIssues=30
+    sonar.dbcleaner.weeksBeforeDeletingAllSnapshots=4
+    
+    # Configuración específica para componentes VUCEM
+    sonar.projectLinks.homepage=https://www.gob.mx/se/acciones-y-programas/ventanilla-unica-de-comercio-exterior-vucem
+    sonar.projectLinks.ci=https://github.com/organizacion/proyecto/actions
+    sonar.projectLinks.issue=https://github.com/organizacion/proyecto/issues

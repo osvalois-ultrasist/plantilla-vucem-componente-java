@@ -1,0 +1,342 @@
+# Gatekeeper Constraints para VUCEM - Policy Enforcement
+
+# ============================================================================
+# CONSTRAINT TEMPLATE: Requerir etiquetas VUCEM
+# ============================================================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: vucemrequiredlabels
+  annotations:
+    description: "Requiere etiquetas específicas para recursos VUCEM"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VucemRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vucemrequiredlabels
+
+        violation[{"msg": msg}] {
+          required := input.parameters.labels
+          provided := input.review.object.metadata.labels
+          missing := required[_]
+          not provided[missing]
+          msg := sprintf("Falta la etiqueta requerida: %v", [missing])
+        }
+---
+# ============================================================================
+# CONSTRAINT: Aplicar etiquetas requeridas
+# ============================================================================
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VucemRequiredLabels
+metadata:
+  name: must-have-vucem-labels
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+      - apiGroups: [""]
+        kinds: ["Service", "ConfigMap", "Secret"]
+    namespaces: ["vucem-dev", "vucem-test", "vucem-prod"]
+  parameters:
+    labels:
+      - "mx.gob.vucem/component"
+      - "mx.gob.vucem/environment"
+      - "app.kubernetes.io/name"
+      - "app.kubernetes.io/version"
+---
+# ============================================================================
+# CONSTRAINT TEMPLATE: Prohibir contenedores privilegiados
+# ============================================================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: vucemdenyprivileged
+  annotations:
+    description: "Prohíbe contenedores privilegiados en VUCEM"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VucemDenyPrivileged
+      validation:
+        openAPIV3Schema:
+          type: object
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vucemdenyprivileged
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged
+          msg := sprintf("Contenedor privilegiado no permitido: %v", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.initContainers[_]
+          container.securityContext.privileged
+          msg := sprintf("Init container privilegiado no permitido: %v", [container.name])
+        }
+---
+# ============================================================================
+# CONSTRAINT: Aplicar prohibición de contenedores privilegiados
+# ============================================================================
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VucemDenyPrivileged
+metadata:
+  name: deny-privileged-containers
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["vucem-dev", "vucem-test", "vucem-prod"]
+---
+# ============================================================================
+# CONSTRAINT TEMPLATE: Validar registros de imágenes autorizados
+# ============================================================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: vucemallowedregistries
+  annotations:
+    description: "Permite solo registros autorizados para VUCEM"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VucemAllowedRegistries
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            registries:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vucemallowedregistries
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          image := container.image
+          not image_allowed(image)
+          msg := sprintf("Registro no autorizado para imagen: %v", [image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.initContainers[_]
+          image := container.image
+          not image_allowed(image)
+          msg := sprintf("Registro no autorizado para init container: %v", [image])
+        }
+
+        image_allowed(image) {
+          allowed_registries := input.parameters.registries
+          registry := get_registry(image)
+          registry == allowed_registries[_]
+        }
+
+        get_registry(image) = registry {
+          parts := split(image, "/")
+          count(parts) > 1
+          registry := parts[0]
+        }
+
+        get_registry(image) = "docker.io" {
+          parts := split(image, "/")
+          count(parts) == 1
+        }
+---
+# ============================================================================
+# CONSTRAINT: Aplicar registros autorizados
+# ============================================================================
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VucemAllowedRegistries
+metadata:
+  name: allowed-image-registries
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["vucem-dev", "vucem-test", "vucem-prod"]
+  parameters:
+    registries:
+      - "ghcr.io"
+      - "registry.vucem.gob.mx"
+      - "docker.io"
+      - "gcr.io"
+---
+# ============================================================================
+# CONSTRAINT TEMPLATE: Requerir límites de recursos
+# ============================================================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: vucemresourcelimits
+  annotations:
+    description: "Requiere límites de recursos para contenedores VUCEM"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VucemResourceLimits
+      validation:
+        openAPIV3Schema:
+          type: object
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vucemresourcelimits
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf("Contenedor sin límite de memoria: %v", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf("Contenedor sin límite de CPU: %v", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.requests.memory
+          msg := sprintf("Contenedor sin solicitud de memoria: %v", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.requests.cpu
+          msg := sprintf("Contenedor sin solicitud de CPU: %v", [container.name])
+        }
+---
+# ============================================================================
+# CONSTRAINT: Aplicar límites de recursos
+# ============================================================================
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VucemResourceLimits
+metadata:
+  name: require-resource-limits
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["vucem-dev", "vucem-test", "vucem-prod"]
+---
+# ============================================================================
+# CONSTRAINT TEMPLATE: Prohibir NodePort en producción
+# ============================================================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: vucemdenynodeport
+  annotations:
+    description: "Prohíbe servicios NodePort en producción VUCEM"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VucemDenyNodePort
+      validation:
+        openAPIV3Schema:
+          type: object
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vucemdenynodeport
+
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Service"
+          input.review.object.spec.type == "NodePort"
+          environment := input.review.object.metadata.labels["mx.gob.vucem/environment"]
+          environment == "prod"
+          msg := "Servicios NodePort no permitidos en producción"
+        }
+---
+# ============================================================================
+# CONSTRAINT: Aplicar prohibición NodePort en producción
+# ============================================================================
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VucemDenyNodePort
+metadata:
+  name: deny-nodeport-in-prod
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Service"]
+    namespaces: ["vucem-prod"]
+---
+# ============================================================================
+# CONSTRAINT TEMPLATE: Requerir TLS en Ingress de producción
+# ============================================================================
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: vucemrequiretls
+  annotations:
+    description: "Requiere TLS en Ingress de producción VUCEM"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VucemRequireTLS
+      validation:
+        openAPIV3Schema:
+          type: object
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package vucemrequiretls
+
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Ingress"
+          environment := input.review.object.metadata.labels["mx.gob.vucem/environment"]
+          environment == "prod"
+          not input.review.object.spec.tls
+          msg := "Ingress en producción debe tener TLS configurado"
+        }
+
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Ingress"
+          environment := input.review.object.metadata.labels["mx.gob.vucem/environment"]
+          environment == "prod"
+          count(input.review.object.spec.tls) == 0
+          msg := "Ingress en producción debe tener al menos una configuración TLS"
+        }
+---
+# ============================================================================
+# CONSTRAINT: Aplicar TLS requerido en producción
+# ============================================================================
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VucemRequireTLS
+metadata:
+  name: require-tls-in-prod-ingress
+spec:
+  match:
+    kinds:
+      - apiGroups: ["networking.k8s.io"]
+        kinds: ["Ingress"]
+    namespaces: ["vucem-prod"]
