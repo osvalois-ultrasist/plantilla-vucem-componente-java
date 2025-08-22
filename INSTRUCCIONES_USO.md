@@ -248,5 +248,5 @@ El script `validar-componente.sh` verifica:
 
 ---
 
-**Última actualización**: 2025-08-22
+**Última actualización**: Agosto 2024
 **Versión de plantilla**: 1.0.0

@@ -155,6 +155,6 @@ Tu plantilla tiene una base sólida con excelentes prácticas de DevSecOps y arq
 
 ---
 
-**Generado el**: 2025-08-21
+**Análisis generado**: Agosto 2024
 **Analista**: Claude Code
 **Versión de Plantilla**: 0.1.0-SNAPSHOT

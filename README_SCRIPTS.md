@@ -209,7 +209,7 @@ Todos los scripts siguen [Semantic Versioning](https://semver.org/):
 - **MINOR**: Nueva funcionalidad compatible
 - **PATCH**: Corrección de bugs
 
-Actual: **2.0.0** (22/08/2025)
+Versión actual: **2.0.0**
 
 ---
 
