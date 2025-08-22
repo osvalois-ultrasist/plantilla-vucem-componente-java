@@ -334,8 +334,8 @@ reorganize_java_packages() {
         
         # Actualizar referencias en archivos Java
         find "$TARGET_DIR/src/main/java" -name "*.java" -exec \
-            sed -i.bak "s/package $BASE_PATH\.$OLD_PACKAGE/package $BASE_PATH.$NOMBRE_PAQUETE/g; \
-                       s/import $BASE_PATH\.$OLD_PACKAGE/import $BASE_PATH.$NOMBRE_PAQUETE/g" {} \;
+            sed -i.bak "s|package $BASE_PATH\.$OLD_PACKAGE|package $BASE_PATH.$NOMBRE_PAQUETE|g; \
+                       s|import $BASE_PATH\.$OLD_PACKAGE|import $BASE_PATH.$NOMBRE_PAQUETE|g" {} \;
         
         # Eliminar backups
         find "$TARGET_DIR" -name "*.bak" -delete
@@ -348,8 +348,8 @@ reorganize_java_packages() {
         
         # Actualizar referencias
         find "$TARGET_DIR/src/test/java" -name "*.java" -exec \
-            sed -i.bak "s/package $BASE_PATH\.$OLD_PACKAGE/package $BASE_PATH.$NOMBRE_PAQUETE/g; \
-                       s/import $BASE_PATH\.$OLD_PACKAGE/import $BASE_PATH.$NOMBRE_PAQUETE/g" {} \;
+            sed -i.bak "s|package $BASE_PATH\.$OLD_PACKAGE|package $BASE_PATH.$NOMBRE_PAQUETE|g; \
+                       s|import $BASE_PATH\.$OLD_PACKAGE|import $BASE_PATH.$NOMBRE_PAQUETE|g" {} \;
         
         # Eliminar backups
         find "$TARGET_DIR" -name "*.bak" -delete
