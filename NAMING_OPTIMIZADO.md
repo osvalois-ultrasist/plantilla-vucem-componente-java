@@ -195,7 +195,7 @@ curl -s vucem.sh/setup | bash && vucem mi-primer-app usuarios
 # ANTES (2024): 85 caracteres, 12 palabras
 curl -sSL https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/crear-componente-remoto.sh | bash -s sistema-aduanas aduanas "Sistema de gestión aduanera"
 
-# AHORA (2025): 45 caracteres, 6 palabras (-47% chars, -50% palabras)
+# OPTIMIZADO: 45 caracteres, 6 palabras (-47% chars, -50% palabras)
 vucem sistema-aduanas aduanas "Sistema de gestión aduanera"
 ```
 

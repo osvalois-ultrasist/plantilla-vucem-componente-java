@@ -183,7 +183,7 @@ vucem mi-app users    # Desde cualquier directorio
 # ANTES (2024): Verboso y complejo
 curl -sSL https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/crear-componente-remoto.sh | bash -s sistema-aduanas aduanas "Sistema de gestión aduanera"
 
-# AHORA (2025): Ultra simple y memorable  
+# OPTIMIZADO: Ultra simple y memorable  
 vucem sistema-aduanas aduanas "Sistema de gestión aduanera"
 ```
 
