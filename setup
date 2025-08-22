@@ -1,0 +1,138 @@
+#!/bin/bash
+
+#############################################################################
+# setup - Configurador Ultra Simple para VUCEM
+# 
+# Descripción: Instala y configura todo lo necesario para VUCEM
+#
+# Uso: ./setup [--install]
+# 
+# Autor: VUCEM Team
+# Versión: 3.0.0
+#############################################################################
+
+set -euo pipefail
+
+# Colores
+readonly G='\033[0;32m' R='\033[0;31m' Y='\033[0;33m' B='\033[1m' NC='\033[0m'
+
+ok() { echo -e "${G}✓${NC} $*"; }
+fail() { echo -e "${R}✗${NC} $*"; }
+warn() { echo -e "${Y}⚠${NC} $*"; }
+info() { echo -e "\033[0;36m▸\033[0m $*"; }
+
+help() {
+    echo -e "${B}setup${NC} - Configurar entorno VUCEM"
+    echo
+    echo "Uso:"
+    echo "  ./setup           # Solo verificar"
+    echo "  ./setup --install # Instalar lo que falte"
+    echo
+    exit 0
+}
+
+# Detectar OS
+detect_os() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "macos"
+    elif [[ -f /etc/debian_version ]]; then
+        echo "debian"
+    elif [[ -f /etc/redhat-release ]]; then
+        echo "redhat"
+    else
+        echo "unknown"
+    fi
+}
+
+# Verificar herramienta
+check_tool() {
+    local tool="$1" min_version="$2" install_cmd="$3"
+    
+    if command -v "$tool" &>/dev/null; then
+        local version
+        case "$tool" in
+            java) version=$(java -version 2>&1 | head -1 | cut -d'"' -f2 | cut -d'.' -f1) ;;
+            mvn) version=$(mvn -version 2>/dev/null | head -1 | cut -d' ' -f3) ;;
+            git) version=$(git --version | cut -d' ' -f3) ;;
+        esac
+        
+        if [[ "$tool" == "java" ]] && [[ ${version:-0} -ge $min_version ]]; then
+            ok "$tool $version"
+        elif [[ "$tool" != "java" ]]; then
+            ok "$tool $version"
+        else
+            warn "$tool $version (se recomienda $min_version+)"
+            if [[ "${INSTALL_MODE:-}" == "true" ]]; then
+                info "Instalando $tool..."
+                eval "$install_cmd"
+            fi
+        fi
+    else
+        fail "$tool no instalado"
+        if [[ "${INSTALL_MODE:-}" == "true" ]]; then
+            info "Instalando $tool..."
+            eval "$install_cmd"
+        fi
+    fi
+}
+
+main() {
+    [[ "$1" == "--help" ]] && help
+    [[ "$1" == "--install" ]] && INSTALL_MODE=true
+    
+    echo -e "${B}VUCEM Setup${NC}"
+    echo
+    
+    local os=$(detect_os)
+    info "Sistema: $os"
+    echo
+    
+    # Comandos de instalación por OS
+    case "$os" in
+        macos)
+            java_cmd="brew install openjdk@21"
+            maven_cmd="brew install maven"
+            git_cmd="brew install git"
+            ;;
+        debian)
+            java_cmd="sudo apt-get update && sudo apt-get install -y openjdk-21-jdk"
+            maven_cmd="sudo apt-get install -y maven"
+            git_cmd="sudo apt-get install -y git"
+            ;;
+        redhat)
+            java_cmd="sudo dnf install -y java-21-openjdk-devel"
+            maven_cmd="sudo dnf install -y maven"
+            git_cmd="sudo dnf install -y git"
+            ;;
+        *)
+            java_cmd="echo 'Instalar Java 21 manualmente'"
+            maven_cmd="echo 'Instalar Maven manualmente'"
+            git_cmd="echo 'Instalar Git manualmente'"
+            ;;
+    esac
+    
+    # Verificar herramientas esenciales
+    check_tool "java" "21" "$java_cmd"
+    check_tool "mvn" "3.8" "$maven_cmd"
+    check_tool "git" "2.0" "$git_cmd"
+    
+    # Verificar opcionales
+    if command -v docker &>/dev/null; then
+        ok "docker $(docker --version | cut -d' ' -f3 | tr -d ',')"
+    else
+        info "docker no instalado (opcional)"
+    fi
+    
+    echo
+    if [[ "${INSTALL_MODE:-}" == "true" ]]; then
+        ok "Setup completado"
+    else
+        info "Para instalar dependencias: ./setup --install"
+    fi
+    
+    echo
+    echo -e "${B}Próximo paso:${NC}"
+    echo "  ./vucem mi-componente area"
+}
+
+main "${1:-}"

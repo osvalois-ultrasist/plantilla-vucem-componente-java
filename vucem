@@ -1,0 +1,121 @@
+#!/bin/bash
+
+#############################################################################
+# vucem - CLI Principal para Plantilla VUCEM
+# 
+# Descripción: Script principal ultra simple para crear componentes VUCEM
+#              desde cualquier lugar con una sola palabra
+#
+# Uso: vucem <nombre> <area> [descripción]
+#      O: curl -s vucem.sh | bash -s <nombre> <area>
+# 
+# Autor: VUCEM Team
+# Versión: 3.0.0
+# Fecha: 2025-08-22
+#############################################################################
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# ===========================================================================
+# CONFIGURACIÓN
+# ===========================================================================
+
+readonly SCRIPT_VERSION="3.0.0"
+readonly GITHUB_RAW="https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main"
+
+# Colores para máxima legibilidad
+if [[ -t 1 ]]; then
+    readonly B='\033[1m'    # Bold
+    readonly R='\033[0;31m' # Red
+    readonly G='\033[0;32m' # Green
+    readonly Y='\033[0;33m' # Yellow
+    readonly C='\033[0;36m' # Cyan
+    readonly NC='\033[0m'   # No Color
+else
+    readonly B='' R='' G='' Y='' C='' NC=''
+fi
+
+# ===========================================================================
+# FUNCIONES ULTRA SIMPLES
+# ===========================================================================
+
+msg() { echo -e "${C}▸${NC} $*"; }
+ok() { echo -e "${G}✓${NC} $*"; }
+warn() { echo -e "${Y}⚠${NC} $*"; }
+err() { echo -e "${R}✗${NC} $*" >&2; }
+
+help() {
+    echo -e "${B}VUCEM${NC} - Generador de Componentes"
+    echo
+    echo -e "${B}USO:${NC}"
+    echo "  vucem <nombre> <area> [\"descripción\"]"
+    echo
+    echo -e "${B}EJEMPLOS:${NC}"
+    echo "  vucem mi-app usuarios"
+    echo "  vucem sistema-aduanas aduanas \"Sistema de gestión\""
+    echo
+    echo -e "${B}REQUISITOS:${NC}"
+    echo "  Java 21+, Maven 3.8+, Git"
+    echo
+    echo -e "${B}MÁS INFO:${NC}"
+    echo "  curl -s ${GITHUB_RAW}/setup | bash  # Instalar dependencias"
+    echo "  curl -s ${GITHUB_RAW}/check | bash  # Validar proyecto"
+    echo
+}
+
+# Validación ultra rápida
+valid() {
+    local name="$1"
+    [[ ${#name} -ge 3 ]] && [[ ${#name} -le 50 ]] && [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] && [[ "$name" != *"--"* ]]
+}
+
+# ===========================================================================
+# PROGRAMA PRINCIPAL ULTRA SIMPLE
+# ===========================================================================
+
+main() {
+    # Mostrar ayuda si no hay argumentos suficientes
+    if [[ $# -lt 2 ]]; then
+        help
+        exit 1
+    fi
+    
+    local name="$1"
+    local area="$2"
+    local desc="${3:-Componente VUCEM para $area}"
+    
+    # Validación rápida
+    if ! valid "$name" || ! valid "$area"; then
+        err "Nombre/área debe: 3-50 chars, solo minúsculas y guiones, empezar con letra"
+        exit 1
+    fi
+    
+    msg "Creando: vucem-${name}"
+    
+    # Verificar curl
+    if ! command -v curl &> /dev/null; then
+        err "curl requerido. Instalar: sudo apt install curl"
+        exit 1
+    fi
+    
+    # Descargar y ejecutar generador remoto
+    if curl -sSL "${GITHUB_RAW}/crear-componente-remoto.sh" | bash -s "$name" "$area" "$desc"; then
+        echo
+        ok "¡Componente creado!"
+        echo
+        echo -e "${B}Próximos pasos:${NC}"
+        echo "  cd vucem-${name}"
+        echo "  mvn spring-boot:run"
+        echo
+        echo -e "${B}URLs útiles:${NC}"
+        echo "  http://localhost:8080/swagger-ui.html"
+        echo "  http://localhost:8080/actuator/health"
+    else
+        err "Error al crear componente"
+        exit 1
+    fi
+}
+
+# Ejecutar
+main "$@"

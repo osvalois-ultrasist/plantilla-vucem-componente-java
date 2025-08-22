@@ -1,0 +1,67 @@
+#!/bin/bash
+
+#############################################################################
+# check - Validador Ultra Simple de Componentes VUCEM
+# 
+# Descripción: Versión simplificada del validador
+#
+# Uso: ./check [directorio]
+# 
+# Autor: VUCEM Team
+# Versión: 3.0.0
+#############################################################################
+
+set -euo pipefail
+
+# Colores
+readonly G='\033[0;32m' R='\033[0;31m' Y='\033[0;33m' B='\033[1m' NC='\033[0m'
+
+ok() { echo -e "${G}✓${NC} $*"; }
+fail() { echo -e "${R}✗${NC} $*"; }
+warn() { echo -e "${Y}⚠${NC} $*"; }
+
+main() {
+    local dir="${1:-.}"
+    
+    if [[ ! -d "$dir" ]]; then
+        fail "Directorio no existe: $dir"
+        exit 1
+    fi
+    
+    echo -e "${B}Validando:${NC} $dir"
+    echo
+    
+    local errors=0
+    
+    # Verificaciones esenciales
+    [[ -f "$dir/pom.xml" ]] && ok "Maven POM" || { fail "Maven POM"; ((errors++)); }
+    [[ -f "$dir/README.md" ]] && ok "README" || { fail "README"; ((errors++)); }
+    [[ -d "$dir/src/main/java" ]] && ok "Código Java" || { fail "Código Java"; ((errors++)); }
+    [[ -f "$dir/src/main/resources/application.yml" ]] && ok "Configuración" || { fail "Configuración"; ((errors++)); }
+    
+    # Buscar arquitectura
+    if find "$dir/src/main/java" -name "domain" -type d &>/dev/null; then
+        ok "Arquitectura modular"
+    else
+        fail "Arquitectura modular"
+        ((errors++))
+    fi
+    
+    # Verificar tests
+    if find "$dir/src/test" -name "*Test.java" &>/dev/null; then
+        ok "Tests encontrados"
+    else
+        warn "Sin tests"
+    fi
+    
+    echo
+    if [[ $errors -eq 0 ]]; then
+        echo -e "${G}✅ Componente válido${NC}"
+        exit 0
+    else
+        echo -e "${R}❌ $errors errores encontrados${NC}"
+        exit 1
+    fi
+}
+
+main "$@"

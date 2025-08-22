@@ -1,0 +1,22 @@
+{
+  "project_name": "vucem-componente",
+  "project_slug": "{{ cookiecutter.project_name.lower().replace(' ', '-').replace('_', '-') }}",
+  "component_name": "{{ cookiecutter.project_slug }}",
+  "component_area": "area-funcional",
+  "component_description": "Componente de VUCEM para {{ cookiecutter.component_area }}",
+  "author_name": "Gobierno de México",
+  "author_email": "vucem@economia.gob.mx",
+  "organization": "mx.gob.vucem",
+  "package_name": "{{ cookiecutter.component_name.replace('-', '') }}",
+  "java_version": "21",
+  "spring_boot_version": "3.2.0",
+  "maven_version": "3.8",
+  "port": "8080",
+  "database_type": "postgresql",
+  "enable_security": "yes",
+  "enable_swagger": "yes",
+  "enable_metrics": "yes",
+  "enable_docker": "yes",
+  "github_repository": "vucem/{{ cookiecutter.project_slug }}",
+  "creation_date": "{% now 'local', '%Y-%m-%d' %}"
+}

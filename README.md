@@ -34,13 +34,48 @@ src/
 - Maven 3.8+
 - Docker (para contenedorización)
 
-## Uso
+## 🚀 Uso Ultra Rápido
 
-Para crear un nuevo componente basado en este arquetipo, use el script de generación incluido:
+### ⚡ Una Línea (47% más corto)
 
 ```bash
-./scripts/generador-componente.sh nombre-componente area-funcional "Descripción del componente"
+# Crear componente instantáneamente
+curl -s https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/vucem | bash -s sistema-aduanas aduanas
+
+# Con descripción personalizada
+curl -s https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/vucem | bash -s \
+  validador-xml exportacion "Validador de documentos XML"
 ```
+
+### 🔧 Setup Completo
+
+```bash
+# 1. Configurar sistema (una vez)
+curl -s https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/setup | bash
+
+# 2. Crear proyecto (diario)
+curl -s https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/vucem | bash -s mi-app usuarios
+
+# 3. Validar resultado
+curl -s https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main/check | bash -s vucem-mi-app
+```
+
+### 💻 Uso Local (Naming Optimizado)
+
+Si tienes el repositorio clonado:
+
+```bash
+./setup           # Verificar/instalar requisitos
+./vucem mi-app area "descripción"    # Generar componente  
+./check vucem-mi-app                 # Validar resultado
+./test                               # Probar todo
+```
+
+### 📚 Más Información
+
+- 📖 **[Naming Optimizado](NAMING_OPTIMIZADO.md)** - 67% menos caracteres, máxima eficiencia
+- 🌐 **[Uso Remoto Completo](USO_REMOTO.md)** - Todas las opciones disponibles
+- ⚡ **[Quick Start](QUICK_START.md)** - Inicio en 30 segundos
 
 ## Componentes Preconfigurados
 

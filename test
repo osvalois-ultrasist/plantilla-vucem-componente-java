@@ -1,0 +1,103 @@
+#!/bin/bash
+
+#############################################################################
+# test - Tester Ultra Simple para URLs y Funcionalidad
+# 
+# Descripción: Prueba rápida de que todo funciona
+#
+# Uso: ./test
+# 
+# Autor: VUCEM Team
+# Versión: 3.0.0
+#############################################################################
+
+set -euo pipefail
+
+# Colores
+readonly G='\033[0;32m' R='\033[0;31m' Y='\033[0;33m' B='\033[1m' NC='\033[0m'
+
+ok() { echo -e "${G}✓${NC} $*"; }
+fail() { echo -e "${R}✗${NC} $*"; }
+test_item() { echo -e "\033[0;36m▸\033[0m $*"; }
+
+# Configuración
+readonly GITHUB_RAW="https://raw.githubusercontent.com/osvalois-ultrasist/template-vucem-componente/main"
+
+# Probar URL
+test_url() {
+    local name="$1" url="$2"
+    
+    test_item "Probando $name..."
+    
+    if curl -sSL "$url" --fail --max-time 10 > /dev/null 2>&1; then
+        ok "$name accesible"
+        return 0
+    else
+        fail "$name no accesible"
+        return 1
+    fi
+}
+
+# Probar script local
+test_local() {
+    local script="$1"
+    
+    test_item "Probando $script..."
+    
+    if [[ -f "$script" ]] && [[ -x "$script" ]]; then
+        ok "$script disponible"
+    else
+        fail "$script no encontrado o sin permisos"
+    fi
+}
+
+main() {
+    echo -e "${B}VUCEM Test Suite${NC}"
+    echo
+    
+    local failed=0
+    
+    # Probar URLs remotas
+    echo -e "${B}URLs Remotas:${NC}"
+    test_url "Generador remoto" "$GITHUB_RAW/crear-componente-remoto.sh" || ((failed++))
+    test_url "CLI principal" "$GITHUB_RAW/vucem" || ((failed++))
+    test_url "Setup" "$GITHUB_RAW/setup" || ((failed++))
+    test_url "Check" "$GITHUB_RAW/check" || ((failed++))
+    
+    echo
+    
+    # Probar scripts locales
+    echo -e "${B}Scripts Locales:${NC}"
+    test_local "./vucem"
+    test_local "./new"
+    test_local "./check"
+    test_local "./setup"
+    test_local "./generar-componente.sh"
+    
+    echo
+    
+    # Probar herramientas
+    echo -e "${B}Herramientas:${NC}"
+    command -v curl &>/dev/null && ok "curl disponible" || { fail "curl faltante"; ((failed++)); }
+    command -v java &>/dev/null && ok "java disponible" || fail "java faltante"
+    command -v mvn &>/dev/null && ok "maven disponible" || fail "maven faltante"
+    command -v git &>/dev/null && ok "git disponible" || fail "git faltante"
+    
+    echo
+    
+    # Resultado final
+    if [[ $failed -eq 0 ]]; then
+        echo -e "${G}✅ Todos los tests pasaron${NC}"
+        echo
+        echo -e "${B}Comandos de prueba:${NC}"
+        echo "  curl -s ${GITHUB_RAW}/vucem | bash -s test-remoto testing"
+        echo "  ./new test-local testing"
+        echo "  ./check ."
+        exit 0
+    else
+        echo -e "${R}❌ $failed tests fallaron${NC}"
+        exit 1
+    fi
+}
+
+main "$@"

@@ -1,0 +1,60 @@
+#!/bin/bash
+
+#############################################################################
+# new - Generador Local de Componentes VUCEM
+# 
+# Descripción: Versión simplificada del generador para uso local
+#
+# Uso: ./new <nombre> <area> [descripción]
+# 
+# Autor: VUCEM Team
+# Versión: 3.0.0
+#############################################################################
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# Colores simples
+readonly G='\033[0;32m' R='\033[0;31m' Y='\033[0;33m' NC='\033[0m'
+
+msg() { echo -e "\033[0;36m▸\033[0m $*"; }
+ok() { echo -e "${G}✓${NC} $*"; }
+err() { echo -e "${R}✗${NC} $*" >&2; }
+
+help() {
+    echo "new - Crear componente VUCEM"
+    echo
+    echo "Uso: ./new <nombre> <area> [\"descripción\"]"
+    echo
+    echo "Ejemplos:"
+    echo "  ./new mi-app usuarios"
+    echo "  ./new sistema-aduanas aduanas \"Mi sistema\""
+    exit 0
+}
+
+# Validación simple
+valid() {
+    local name="$1"
+    [[ ${#name} -ge 3 ]] && [[ ${#name} -le 50 ]] && [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]]
+}
+
+main() {
+    [[ $# -lt 2 ]] && help
+    
+    local name="$1" area="$2" desc="${3:-Componente VUCEM para $area}"
+    
+    valid "$name" || { err "Nombre inválido"; exit 1; }
+    valid "$area" || { err "Área inválida"; exit 1; }
+    
+    msg "Generando vucem-${name}..."
+    
+    # Ejecutar generador principal
+    if [[ -f "generar-componente.sh" ]]; then
+        echo "s" | ./generar-componente.sh "$name" "$area" "$desc"
+    else
+        err "generar-componente.sh no encontrado"
+        exit 1
+    fi
+}
+
+main "$@"
